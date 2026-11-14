@@ -1335,3 +1335,708 @@ double mj2x_strictmath_cbrt(double value)
     mj2x_sm_set_hi(&t, mj2x_sm_hi(t) | sign); /* 恢复符号位 */
     return t;
 }
+
+// ---- Math/StrictMath 补缺面(perf/regc-jni-hotpath) ----
+//
+// JDK 17 实源对齐(Math 与 StrictMath 同签名共用 symbol,见头文件注):
+//   - expm1/log1p/sinh/cosh/tanh/IEEEremainder:fdlibm 5.3 算法结构移植
+//     (s_expm1/s_log1p/e_sinh/e_cosh/s_tanh/e_remainder + e_fmod 依赖),
+//     位型操作全部经上方 memcpy 助手(免别名 UB,字节序无关)。
+//   - copySign/toDegrees/toRadians/fma/ulp/getExponent/nextAfter/nextUp/
+//     nextDown/scalb:java.lang.Math JDK 17 实源逐式移植(StrictMath 侧
+//     JDK 17 即转委派 Math,同 symbol 位精确)。
+//   - 32 位整型上的移位/回绕(如 k<<20 指数加减)先转 uint32 再运算,
+//     规避 C 负数左移 UB;uint32 加法回绕语义与 fdlibm __HI(x) += 一致。
+
+static uint32_t mj2x_sm_f32_bits(float value)
+{
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    return bits;
+}
+
+static float mj2x_sm_f32_from_bits(uint32_t bits)
+{
+    float value;
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+static uint64_t mj2x_sm_f64_bits(double value)
+{
+    uint64_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    return bits;
+}
+
+static double mj2x_sm_f64_from_bits(uint64_t bits)
+{
+    double value;
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+/* JDK 17 powerOfTwoD(n):正常区 2^n(阶码位构造,n 在 [-1022, 1023])。 */
+static double mj2x_sm_pow2_f64(int32_t n)
+{
+    return mj2x_sm_f64_from_bits((uint64_t)(uint32_t)(n + 1023) << 52);
+}
+
+/* ---- expm1(fdlibm s_expm1.c):k*ln2+r 归约 + 5 阶有理近似 ---- */
+
+double mj2x_strictmath_expm1(double x)
+{
+    static const double one         = 1.0;
+    static const double huge        = 1.0e+300;
+    static const double tiny        = 1.0e-300;
+    static const double o_threshold = 7.09782712893383973096e+02; /* 0x40862E42, 0xFEFA39EF */
+    static const double ln2_hi      = 6.93147180369123816490e-01; /* 0x3fe62e42, 0xfee00000 */
+    static const double ln2_lo      = 1.90821492927058770002e-10; /* 0x3dea39ef, 0x35793c76 */
+    static const double invln2      = 1.44269504088896338700e+00; /* 0x3ff71547, 0x652b82fe */
+    /* 缩放系数(Qi*2^i,z 取 x^2/2) */
+    static const double Q1 = -3.33333333333331316428e-02; /* BFA11111 111110F4 */
+    static const double Q2 =  1.58730158725481460165e-03; /* 3F5A01A0 19FE5585 */
+    static const double Q3 = -7.93650757867487942473e-05; /* BF14CE19 9EAADBB7 */
+    static const double Q4 =  4.00821782732936239552e-06; /* 3ED0CFCA 86E65239 */
+    static const double Q5 = -2.01099218183624371326e-07; /* BE8AFDB7 6E09C32D */
+    double   y, hi = 0.0, lo = 0.0, c = 0.0, t, e, hxs, hfx, r1;
+    int32_t  k, xsb;
+    uint32_t hx;
+
+    hx  = mj2x_sm_hi(x);
+    xsb = (int32_t)(hx & UINT32_C(0x80000000)); /* x 的符号位 */
+    y   = (xsb == 0) ? x : -x;                  /* y = |x| */
+    hx &= UINT32_C(0x7fffffff);                 /* |x| 高字 */
+    /* 大参数与非有限值分流 */
+    if (hx >= UINT32_C(0x4043687A)) {           /* |x| >= 56*ln2 */
+        if (hx >= UINT32_C(0x40862E42)) {       /* |x| >= 709.78... */
+            if (hx >= UINT32_C(0x7ff00000)) {
+                if (((hx & UINT32_C(0xfffff)) | mj2x_sm_lo(x)) != 0) {
+                    return x + x;               /* NaN */
+                }
+                return (xsb == 0) ? x : -1.0;   /* expm1(+-inf) = {+inf, -1} */
+            }
+            if (x > o_threshold) return huge * huge; /* 溢出 → +Inf */
+        }
+        if (xsb != 0) {                         /* x < -56*ln2 → -1.0(带 inexact) */
+            if (x + tiny < 0.0) return tiny - one;
+        }
+    }
+    /* 参数归约 */
+    if (hx > UINT32_C(0x3fd62e42)) {            /* |x| > 0.5 ln2 */
+        if (hx < UINT32_C(0x3FF0A2B2)) {        /* |x| < 1.5 ln2 */
+            if (xsb == 0) {
+                hi = x - ln2_hi;
+                lo = ln2_lo;
+                k  = 1;
+            }
+            else {
+                hi = x + ln2_hi;
+                lo = -ln2_lo;
+                k  = -1;
+            }
+        }
+        else {
+            k  = (int32_t)(invln2 * x + ((xsb == 0) ? 0.5 : -0.5));
+            t  = (double)k;
+            hi = x - t * ln2_hi;                /* t*ln2_hi 精确 */
+            lo = t * ln2_lo;
+        }
+        x  = hi - lo;
+        c  = (hi - x) - lo;
+    }
+    else if (hx < UINT32_C(0x3c900000)) {       /* |x| < 2^-54 → 原样(带 inexact) */
+        t = huge + x;
+        return x - (t - (huge + x));
+    }
+    else {
+        k = 0;
+    }
+    /* 主区间有理近似 */
+    hfx = 0.5 * x;
+    hxs = x * hfx;
+    r1  = one + hxs * (Q1 + hxs * (Q2 + hxs * (Q3 + hxs * (Q4 + hxs * Q5))));
+    t   = 3.0 - r1 * hfx;
+    e   = hxs * ((r1 - t) / (6.0 - x * t));
+    if (k == 0) return x - (x * e - hxs);       /* c 为 0 */
+    e  = (x * (e - c) - c);
+    e -= hxs;
+    if (k == -1) return 0.5 * (x - e) - 0.5;
+    if (k == 1) {
+        if (x < -0.25) return -2.0 * (e - (x + 0.5));
+        return one + 2.0 * (x - e);
+    }
+    if (k <= -2 || k > 56) {                    /* 直接 2^k*(exp(r))-1 */
+        y = one - (e - x);
+        mj2x_sm_set_hi(&y, mj2x_sm_hi(y) + ((uint32_t)(int32_t)k << 20));
+        return y - one;
+    }
+    t = one;
+    if (k < 20) {
+        mj2x_sm_set_hi(&t, UINT32_C(0x3ff00000) - (UINT32_C(0x200000) >> k)); /* t = 1-2^-k */
+        y = t - (e - x);
+        mj2x_sm_set_hi(&y, mj2x_sm_hi(y) + ((uint32_t)(int32_t)k << 20));
+    }
+    else {
+        mj2x_sm_set_hi(&t, (uint32_t)(0x3ff - k) << 20); /* 2^-k */
+        y = x - (e + t);
+        y += one;
+        mj2x_sm_set_hi(&y, mj2x_sm_hi(y) + ((uint32_t)(int32_t)k << 20));
+    }
+    return y;
+}
+
+/* ---- log1p(fdlibm s_log1p.c):1+x=2^k*(1+f) 归约 + s=f/(2+f) 级数 ---- */
+
+double mj2x_strictmath_log1p(double x)
+{
+    static const double ln2_hi = 6.93147180369123816490e-01; /* 3fe62e42 fee00000 */
+    static const double ln2_lo = 1.90821492927058770002e-10; /* 3dea39ef 35793c76 */
+    static const double two54  = 1.80143985094819840000e+16; /* 43500000 00000000 */
+    static const double Lp1    = 6.666666666666735130e-01;   /* 3FE55555 55555593 */
+    static const double Lp2    = 3.999999999940941908e-01;   /* 3FD99999 9997FA04 */
+    static const double Lp3    = 2.857142874366239149e-01;   /* 3FD24924 94229359 */
+    static const double Lp4    = 2.222219843214978396e-01;   /* 3FCC71C5 1D8E78AF */
+    static const double Lp5    = 1.818357216161805012e-01;   /* 3FC74664 96CB03DE */
+    static const double Lp6    = 1.531383769920937332e-01;   /* 3FC39A09 D078C69F */
+    static const double Lp7    = 1.479819860511658591e-01;   /* 3FC2F112 DF3E5244 */
+    static double       zero   = 0.0;                        /* 防-1/0 常量折叠 */
+    double   hfsq, f, c = 0.0, s, z, R, u;
+    int32_t  k, hx, hu = 0, ax;
+
+    hx = (int32_t)mj2x_sm_hi(x); /* 高字(带符号,负数走 int 比较分支) */
+    ax = hx & 0x7fffffff;
+    k  = 1;
+    if (hx < (int32_t)UINT32_C(0x3FDA827A)) {   /* x < 0.41422 */
+        if (ax >= (int32_t)UINT32_C(0x3ff00000)) { /* x <= -1.0 */
+            if (x == -1.0) return -two54 / zero;   /* log1p(-1) = -Inf */
+            return (x - x) / (x - x);              /* log1p(x<-1) = NaN */
+        }
+        if (ax < (int32_t)UINT32_C(0x3e200000)) {  /* |x| < 2^-29 */
+            if (two54 + x > zero && ax < (int32_t)UINT32_C(0x3c900000)) {
+                return x;                          /* |x| < 2^-54 原样 */
+            }
+            return x - x * x * 0.5;
+        }
+        if (hx > 0 || hx <= (int32_t)UINT32_C(0xbfd2bec3)) { /* -0.2929<x 或 x<=-0.2929 */
+            k  = 0;
+            f  = x;
+            hu = 1;
+        }
+    }
+    else {
+        if (hx >= (int32_t)UINT32_C(0x7ff00000)) return x + x; /* NaN/+Inf */
+    }
+    if (k != 0) {
+        if (hx < (int32_t)UINT32_C(0x43400000)) {
+            u  = 1.0 + x;
+            hu = (int32_t)mj2x_sm_hi(u);
+            k  = (hu >> 20) - 1023;
+            c  = (k > 0) ? 1.0 - (u - x) : x - (u - 1.0); /* 修正项 */
+            c /= u;
+        }
+        else {
+            u  = x;
+            hu = (int32_t)mj2x_sm_hi(u);
+            k  = (hu >> 20) - 1023;
+            c  = 0;
+        }
+        hu &= 0x000fffff;
+        if (hu < 0x6a09e) {
+            mj2x_sm_set_hi(&u, (uint32_t)hu | UINT32_C(0x3ff00000)); /* 归一化 u */
+        }
+        else {
+            k += 1;
+            mj2x_sm_set_hi(&u, (uint32_t)hu | UINT32_C(0x3fe00000)); /* 归一化 u/2 */
+            hu = (int32_t)((UINT32_C(0x00100000) - (uint32_t)hu) >> 2);
+        }
+        f = u - 1.0;
+    }
+    hfsq = 0.5 * f * f;
+    if (hu == 0) {                              /* |f| < 2^-20 快路径 */
+        if (f == zero) {
+            if (k == 0) return zero;
+            c += (double)k * ln2_lo;
+            return (double)k * ln2_hi + c;
+        }
+        R = hfsq * (1.0 - 0.66666666666666666 * f);
+        if (k == 0) return f - R;
+        return (double)k * ln2_hi - ((R - ((double)k * ln2_lo + c)) - f);
+    }
+    s = f / (2.0 + f);
+    z = s * s;
+    R = z * (Lp1 + z * (Lp2 + z * (Lp3 + z * (Lp4 + z * (Lp5 + z * (Lp6 + z * Lp7))))));
+    if (k == 0) return f - (hfsq - s * (hfsq + R));
+    return (double)k * ln2_hi - ((hfsq - (s * (hfsq + R) + ((double)k * ln2_lo + c))) - f);
+}
+
+/* ---- sinh(fdlibm e_sinh.c):expm1/exp/溢出阈值分段 ---- */
+
+double mj2x_strictmath_sinh(double x)
+{
+    static const double one   = 1.0;
+    static const double shuge = 1.0e307;
+    double   t, w, h;
+    int32_t  ix, jx;
+    uint32_t lx;
+
+    jx = (int32_t)mj2x_sm_hi(x);
+    ix = jx & 0x7fffffff;
+    if (ix >= (int32_t)UINT32_C(0x7ff00000)) return x + x; /* NaN → NaN,±Inf → ±Inf */
+    h = 0.5;
+    if (jx < 0) h = -h;
+    if (ix < (int32_t)UINT32_C(0x40360000)) {   /* |x| < 22 */
+        if (ix < (int32_t)UINT32_C(0x3e300000)) { /* |x| < 2^-28 */
+            if (shuge + x > one) return x;        /* sinh(tiny) = tiny(带 inexact) */
+        }
+        t = mj2x_strictmath_expm1(fabs(x));
+        if (ix < (int32_t)UINT32_C(0x3ff00000)) return h * (2.0 * t - t * t / (t + one));
+        return h * (t + t / (t + one));
+    }
+    if (ix < (int32_t)UINT32_C(0x40862E42)) {   /* |x| < 709.78 */
+        return h * mj2x_strictmath_exp(fabs(x));
+    }
+    /* [709.78, 710.43..):exp(|x|) 溢出但 sinh 半积仍有限 */
+    lx = mj2x_sm_lo(x);
+    if (ix < (int32_t)UINT32_C(0x408633CE) ||
+        (ix == (int32_t)UINT32_C(0x408633ce) && lx <= UINT32_C(0x8fb9f87d))) {
+        w = mj2x_strictmath_exp(0.5 * fabs(x));
+        t = h * w;
+        return t * w;
+    }
+    return x * shuge;                           /* 溢出 → ±Inf */
+}
+
+/* ---- cosh(fdlibm e_cosh.c):expm1/exp/溢出阈值分段 ---- */
+
+double mj2x_strictmath_cosh(double x)
+{
+    static const double one  = 1.0;
+    static const double half = 0.5;
+    static const double huge = 1.0e300;
+    double   t, w;
+    int32_t  ix;
+    uint32_t lx;
+
+    ix = (int32_t)mj2x_sm_hi(x) & 0x7fffffff;
+    if (ix >= (int32_t)UINT32_C(0x7ff00000)) return x * x; /* NaN → NaN,±Inf → +Inf */
+    if (ix < (int32_t)UINT32_C(0x3fd62e43)) {   /* |x| < 0.5*ln2 */
+        t = mj2x_strictmath_expm1(fabs(x));
+        w = one + t;
+        if (ix < (int32_t)UINT32_C(0x3c800000)) return w; /* cosh(tiny) = 1 */
+        return one + (t * t) / (w + w);
+    }
+    if (ix < (int32_t)UINT32_C(0x40360000)) {   /* |x| < 22 */
+        t = mj2x_strictmath_exp(fabs(x));
+        return half * t + half / t;
+    }
+    if (ix < (int32_t)UINT32_C(0x40862E42)) {   /* |x| < 709.78 */
+        return half * mj2x_strictmath_exp(fabs(x));
+    }
+    lx = mj2x_sm_lo(x);
+    if (ix < (int32_t)UINT32_C(0x408633CE) ||
+        (ix == (int32_t)UINT32_C(0x408633ce) && lx <= UINT32_C(0x8fb9f87d))) {
+        w = mj2x_strictmath_exp(half * fabs(x));
+        t = half * w;
+        return t * w;
+    }
+    return huge * huge;                         /* 溢出 → +Inf */
+}
+
+/* ---- tanh(fdlibm s_tanh.c):expm1(-2x)/(expm1(2x)) 分段 ---- */
+
+double mj2x_strictmath_tanh(double x)
+{
+    static const double one  = 1.0;
+    static const double two  = 2.0;
+    static const double tiny = 1.0e-300;
+    double  t, z;
+    int32_t jx, ix;
+
+    jx = (int32_t)mj2x_sm_hi(x);
+    ix = jx & 0x7fffffff;
+    if (ix >= (int32_t)UINT32_C(0x7ff00000)) {
+        if (jx >= 0) return one / x + one;      /* tanh(+inf) = +1 */
+        return one / x - one;                   /* tanh(NaN) = NaN */
+    }
+    if (ix < (int32_t)UINT32_C(0x40360000)) {   /* |x| < 22 */
+        if (ix < (int32_t)UINT32_C(0x3c800000)) { /* |x| < 2^-55 */
+            return x * (one + x);               /* tanh(small) = small */
+        }
+        if (ix >= (int32_t)UINT32_C(0x3ff00000)) { /* |x| >= 1 */
+            t = mj2x_strictmath_expm1(two * fabs(x));
+            z = one - two / (t + two);
+        }
+        else {
+            t = mj2x_strictmath_expm1(-two * fabs(x));
+            z = -t / (t + two);
+        }
+    }
+    else {
+        z = one - tiny;                         /* |x| > 22 → ±1(带 inexact) */
+    }
+    return (jx >= 0) ? z : -z;
+}
+
+/* ---- fmod(fdlibm e_fmod.c):移位相减精确余,IEEEremainder 依赖 ---- */
+
+static double mj2x_sm_fmod(double x, double y)
+{
+    static const double kZero[2] = {0.0, -0.0};
+    int32_t  n, hx, hy, hz, ix, iy;
+    uint32_t lx, ly, lz, sx, i;
+
+    hx = (int32_t)mj2x_sm_hi(x);
+    lx = mj2x_sm_lo(x);
+    hy = (int32_t)mj2x_sm_hi(y);
+    ly = mj2x_sm_lo(y);
+    sx = (uint32_t)hx & UINT32_C(0x80000000);   /* x 的符号位 */
+    hx ^= (int32_t)sx;                          /* |x| 高字 */
+    hy &= UINT32_C(0x7fffffff);                 /* |y| 高字 */
+    /* 异常值:y=0、x 非有限、y 为 NaN → 0/0 型 NaN */
+    if (((uint32_t)hy | ly) == 0 || hx >= (int32_t)UINT32_C(0x7ff00000) ||
+        ((uint32_t)hy | ((ly | (0u - ly)) >> 31)) > UINT32_C(0x7ff00000)) {
+        return (x * y) / (x * y);
+    }
+    if (hx <= hy) {
+        if (hx < hy || lx < ly) return x;                 /* |x| < |y| 原样 */
+        if (lx == ly) return kZero[sx >> 31];             /* |x| == |y| → 符号零 */
+    }
+    /* ilogb(x)：fdlibm 的 i 为带符号 int，靠符号位截断停止（迭代数 =
+     * clz32(lx)）；C 有符号左移溢出 UB，改 uint32 计数 + 显式符号位判定，
+     * 迭代数逐位一致。 */
+    if (hx < (int32_t)UINT32_C(0x00100000)) {
+        if (hx == 0) {
+            for (ix = -1043, i = lx; i != 0 && (i & UINT32_C(0x80000000)) == 0; i <<= 1) ix -= 1;
+        }
+        else {
+            for (ix = -1022, i = (uint32_t)hx << 11; i != 0 && (i & UINT32_C(0x80000000)) == 0; i <<= 1) ix -= 1;
+        }
+    }
+    else {
+        ix = (hx >> 20) - 1023;
+    }
+    /* ilogb(y) */
+    if (hy < (int32_t)UINT32_C(0x00100000)) {
+        if (hy == 0) {
+            for (iy = -1043, i = ly; i != 0 && (i & UINT32_C(0x80000000)) == 0; i <<= 1) iy -= 1;
+        }
+        else {
+            for (iy = -1022, i = (uint32_t)hy << 11; i != 0 && (i & UINT32_C(0x80000000)) == 0; i <<= 1) iy -= 1;
+        }
+    }
+    else {
+        iy = (hy >> 20) - 1023;
+    }
+    /* 对齐 {hx,lx} 与 {hy,ly} */
+    if (ix >= -1022) {
+        hx = (int32_t)(UINT32_C(0x00100000) | (UINT32_C(0x000fffff) & (uint32_t)hx));
+    }
+    else {                                      /* 次正规 x:移位到正规 */
+        n = -1022 - ix;
+        if (n <= 31) {
+            hx = (int32_t)(((uint32_t)hx << n) | (lx >> (32 - n)));
+            lx <<= n;
+        }
+        else {
+            hx = (int32_t)(lx << (n - 32));
+            lx = 0;
+        }
+    }
+    if (iy >= -1022) {
+        hy = (int32_t)(UINT32_C(0x00100000) | (UINT32_C(0x000fffff) & (uint32_t)hy));
+    }
+    else {
+        n = -1022 - iy;
+        if (n <= 31) {
+            hy = (int32_t)(((uint32_t)hy << n) | (ly >> (32 - n)));
+            ly <<= n;
+        }
+        else {
+            hy = (int32_t)(ly << (n - 32));
+            ly = 0;
+        }
+    }
+    /* 定点移位相减 */
+    n = ix - iy;
+    while (n-- > 0) {
+        hz = hx - hy;
+        lz = lx - ly;
+        if (lx < ly) hz -= 1;
+        if (hz < 0) {
+            hx = hx + hx + (int32_t)(lx >> 31);
+            lx = lx + lx;
+        }
+        else {
+            if ((hz | (int32_t)lz) == 0) return kZero[sx >> 31];
+            hx = hz + hz + (int32_t)(lz >> 31);
+            lx = lz + lz;
+        }
+    }
+    hz = hx - hy;
+    lz = lx - ly;
+    if (lx < ly) hz -= 1;
+    if (hz >= 0) {
+        hx = hz;
+        lx = lz;
+    }
+    if (((uint32_t)hx | lx) == 0) return kZero[sx >> 31];
+    /* 还原浮点值并恢复符号 */
+    while (hx < (int32_t)UINT32_C(0x00100000)) { /* 归一化 */
+        hx = hx + hx + (int32_t)(lx >> 31);
+        lx = lx + lx;
+        iy -= 1;
+    }
+    if (iy >= -1022) {                          /* 正常输出 */
+        hx = (int32_t)(((uint32_t)(hx - 0x00100000)) | ((uint32_t)(iy + 1023) << 20));
+        mj2x_sm_set_hi(&x, (uint32_t)hx | sx);
+        mj2x_sm_set_lo(&x, lx);
+    }
+    else {                                      /* 次正规输出 */
+        n = -1022 - iy;
+        if (n <= 20) {
+            lx = (lx >> n) | ((uint32_t)hx << (32 - n));
+            hx >>= n;
+        }
+        else if (n <= 31) {
+            lx = ((uint32_t)hx << (32 - n)) | (lx >> n);
+            hx = (int32_t)sx;
+        }
+        else {
+            lx = (uint32_t)hx >> (n - 32);
+            hx = (int32_t)sx;
+        }
+        mj2x_sm_set_hi(&x, (uint32_t)hx | sx);
+        mj2x_sm_set_lo(&x, lx);
+        x *= 1.0;                               /* 产生必要 inexact 信号 */
+    }
+    return x;
+}
+
+/* ---- IEEEremainder(fdlibm e_remainder.c):x REM p(最近偶数商) ---- */
+
+double mj2x_strictmath_ieee_remainder(double x, double p)
+{
+    int32_t  hx, hp;
+    uint32_t sx, lx, lp;
+    double   p_half;
+
+    hx = (int32_t)mj2x_sm_hi(x);
+    lx = mj2x_sm_lo(x);
+    hp = (int32_t)mj2x_sm_hi(p);
+    lp = mj2x_sm_lo(p);
+    sx = (uint32_t)hx & UINT32_C(0x80000000);
+    hp &= (int32_t)UINT32_C(0x7fffffff);
+    hx &= (int32_t)UINT32_C(0x7fffffff);
+    /* 异常值:p=0、x 非有限、p 为 NaN → 0/0 型 NaN */
+    if ((hp == 0 && lp == 0) || hx >= (int32_t)UINT32_C(0x7ff00000) ||
+        (hp >= (int32_t)UINT32_C(0x7ff00000) &&
+         (((uint32_t)hp - UINT32_C(0x7ff00000)) | lp) != 0)) {
+        return (x * p) / (x * p);
+    }
+    if (hp <= (int32_t)UINT32_C(0x7fdfffff)) x = mj2x_sm_fmod(x, p + p); /* x < 2p */
+    if ((((uint32_t)(hx - hp)) | (lx - lp)) == 0) return 0.0 * x; /* x==±p → 符号零 */
+    x = fabs(x);
+    p = fabs(p);
+    if (hp < (int32_t)UINT32_C(0x00200000)) {   /* 次正规 p:倍加比较 */
+        if (x + x > p) {
+            x -= p;
+            if (x + x >= p) x -= p;
+        }
+    }
+    else {
+        p_half = 0.5 * p;
+        if (x > p_half) {
+            x -= p;
+            if (x >= p_half) x -= p;
+        }
+    }
+    mj2x_sm_set_hi(&x, mj2x_sm_hi(x) ^ sx);     /* 恢复被除数符号 */
+    return x;
+}
+
+/* ---- copySign(JDK 17 Math 位操作式:sign 位直取) ---- */
+
+double mj2x_strictmath_copy_sign_f64(double magnitude, double sign)
+{
+    /* 与静态助手 mj2x_sm_copysign 同式(SIGN_BIT_MASK 取 sign、其余取
+     * magnitude);NaN sign 的位型残留口径见头文件注。 */
+    return mj2x_sm_copysign(magnitude, sign);
+}
+
+float mj2x_strictmath_copy_sign_f32(float magnitude, float sign)
+{
+    const uint32_t mb = mj2x_sm_f32_bits(magnitude);
+    const uint32_t sb = mj2x_sm_f32_bits(sign);
+    return mj2x_sm_f32_from_bits((sb & UINT32_C(0x80000000)) | (mb & UINT32_C(0x7FFFFFFF)));
+}
+
+/* ---- toDegrees/toRadians(JDK 17 常量乘式,StrictMath 委派 Math) ---- */
+
+double mj2x_strictmath_to_degrees(double angrad)
+{
+    /* JDK 17 Math.RADIANS_TO_DEGREES = 57.29577951308232(180/pi 双舍入)。 */
+    return angrad * 57.29577951308232;
+}
+
+double mj2x_strictmath_to_radians(double angdeg)
+{
+    /* JDK 17 Math.DEGREES_TO_RADIANS = 0.017453292519943295(pi/180 双舍入)。 */
+    return angdeg * 0.017453292519943295;
+}
+
+/* ---- fma(C99 fma/fmaf:单次舍入,HotSpot vfmadd 同语义) ---- */
+
+double mj2x_strictmath_fma_f64(double a, double b, double c)
+{
+    return fma(a, b, c);
+}
+
+float mj2x_strictmath_fma_f32(float a, float b, float c)
+{
+    return fmaf(a, b, c);
+}
+
+/* ---- ulp(JDK 17 switch 公式) ---- */
+
+double mj2x_strictmath_ulp_f64(double d)
+{
+    /* JDK 17 Math.ulp(double):NaN/±Inf→|d|;0/次正规→MIN_VALUE;
+     * 其余 2^(exp-52)(次正规结果按位型 1<<(exp-MIN_SUB_EXPONENT))。 */
+    int32_t exp = (int32_t)((mj2x_sm_hi(d) & UINT32_C(0x7FF00000)) >> 20) - 1023;
+    if (exp == 1024) return fabs(d);            /* NaN 或 ±Inf */
+    if (exp == -1023) return mj2x_sm_f64_from_bits(UINT64_C(1)); /* 0/次正规 → MIN_VALUE */
+    exp -= 52;                                  /* SIGNIFICAND_WIDTH-1 */
+    if (exp >= -1022) return mj2x_sm_pow2_f64(exp);
+    return mj2x_sm_f64_from_bits((uint64_t)1u << (uint32_t)(exp + 1074)); /* 次正规 */
+}
+
+float mj2x_strictmath_ulp_f32(float f)
+{
+    int32_t exp = (int32_t)((mj2x_sm_f32_bits(f) & UINT32_C(0x7F800000)) >> 23) - 127;
+    if (exp == 128) return fabsf(f);            /* NaN 或 ±Inf */
+    if (exp == -127) return mj2x_sm_f32_from_bits(1u); /* 0/次正规 → Float.MIN_VALUE */
+    exp -= 23;
+    if (exp >= -125) return mj2x_sm_f32_from_bits((uint32_t)(exp + 127) << 23);
+    return mj2x_sm_f32_from_bits(1u << (uint32_t)(exp + 149));
+}
+
+/* ---- getExponent(阶码位直取 - bias) ---- */
+
+int32_t mj2x_strictmath_get_exponent_f64(double d)
+{
+    return (int32_t)((mj2x_sm_hi(d) & UINT32_C(0x7FF00000)) >> 20) - 1023;
+}
+
+int32_t mj2x_strictmath_get_exponent_f32(float f)
+{
+    return (int32_t)((mj2x_sm_f32_bits(f) & UINT32_C(0x7F800000)) >> 23) - 127;
+}
+
+/* ---- nextAfter/nextUp/nextDown(JDK 17 位型邻域) ---- */
+
+double mj2x_strictmath_next_after_f64(double start, double direction)
+{
+    /* IEEE 位型按有符号幅值整数字典序:负侧整数表示递减即向零方向,
+     * 下降分支 transducer>0?-1:+1、上升分支 transducer>=0?+1:-1。 */
+    if (start > direction) {                    /* 下降 */
+        if (start != 0.0) {
+            const int64_t transducer = (int64_t)mj2x_sm_f64_bits(start);
+            return mj2x_sm_f64_from_bits(
+                (uint64_t)(transducer + ((transducer > 0) ? INT64_C(-1) : INT64_C(1))));
+        }
+        /* start == 0.0 且 direction < 0.0 */
+        return mj2x_sm_f64_from_bits(UINT64_C(0x8000000000000001)); /* -MIN_VALUE */
+    }
+    if (start < direction) {                    /* 上升(+0.0 归一 -0.0) */
+        const int64_t transducer = (int64_t)mj2x_sm_f64_bits(start + 0.0);
+        return mj2x_sm_f64_from_bits(
+            (uint64_t)(transducer + ((transducer >= 0) ? INT64_C(1) : INT64_C(-1))));
+    }
+    if (start == direction) return direction;
+    return start + direction;                   /* 任一入参 NaN:JDK 即 start+direction */
+}
+
+double mj2x_strictmath_next_up_f64(double d)
+{
+    if (d < HUGE_VAL) {                         /* NaN/+Inf 落入 else 原样返回 */
+        const int64_t transducer = (int64_t)mj2x_sm_f64_bits(d + 0.0); /* 归一 -0.0 */
+        return mj2x_sm_f64_from_bits(
+            (uint64_t)(transducer + ((transducer >= 0) ? INT64_C(1) : INT64_C(-1))));
+    }
+    return d;
+}
+
+float mj2x_strictmath_next_up_f32(float f)
+{
+    if (f < HUGE_VALF) {
+        const int32_t transducer = (int32_t)mj2x_sm_f32_bits(f + 0.0f);
+        return mj2x_sm_f32_from_bits((uint32_t)(transducer + ((transducer >= 0) ? 1 : -1)));
+    }
+    return f;
+}
+
+double mj2x_strictmath_next_down_f64(double d)
+{
+    if (isnan(d) || d == -HUGE_VAL) return d;
+    if (d == 0.0) return mj2x_sm_f64_from_bits(UINT64_C(0x8000000000000001)); /* -MIN_VALUE */
+    {
+        const int64_t transducer = (int64_t)mj2x_sm_f64_bits(d);
+        return mj2x_sm_f64_from_bits(
+            (uint64_t)(transducer + ((d > 0.0) ? INT64_C(-1) : INT64_C(1))));
+    }
+}
+
+float mj2x_strictmath_next_down_f32(float f)
+{
+    if (isnan(f) || f == -HUGE_VALF) return f;
+    if (f == 0.0f) return mj2x_sm_f32_from_bits(UINT32_C(0x80000001)); /* -MIN_VALUE */
+    {
+        const int32_t transducer = (int32_t)mj2x_sm_f32_bits(f);
+        return mj2x_sm_f32_from_bits((uint32_t)(transducer + ((f > 0.0f) ? -1 : 1)));
+    }
+}
+
+/* ---- scalb(JDK 17 乘法步进式) ---- */
+
+double mj2x_strictmath_scalb_f64(double d, int32_t scale_factor)
+{
+    /* JDK 17 Math.scalb(double,int):MAX_SCALE = MAX_EXPONENT + -MIN_EXPONENT
+     * + SIGNIFICAND_WIDTH + 1 = 2099;先 2^(scale mod 512) 单乘再 2^±512
+     * 步进,乘法次序保证缩下方向至多一次真实舍入(次正规只在单乘出现)。 */
+    static const int32_t kMaxScale = 1023 + 1022 + 53 + 1;
+    int32_t exp_adjust;
+    int32_t scale_increment;
+    double  exp_delta;
+    if (scale_factor < 0) {
+        if (scale_factor < -kMaxScale) scale_factor = -kMaxScale;
+        scale_increment = -512;
+        exp_delta = mj2x_sm_f64_from_bits(UINT64_C(0x1FF0000000000000)); /* 2^-512 */
+    }
+    else {
+        if (scale_factor > kMaxScale) scale_factor = kMaxScale;
+        scale_increment = 512;
+        exp_delta = mj2x_sm_f64_from_bits(UINT64_C(0x5FF0000000000000)); /* 2^512 */
+    }
+    /* scale mod 512(带符号余数,JDK 17 用 (scale>>8)>>>23 移位技巧求同值,
+     * 本夹取区间 [-2099, 2099] 内 C99 % 与之逐位等价)。 */
+    exp_adjust = scale_factor % 512;
+    d *= mj2x_sm_f64_from_bits((uint64_t)(uint32_t)(exp_adjust + 1023) << 52);
+    scale_factor -= exp_adjust;
+    while (scale_factor != 0) {
+        d *= exp_delta;
+        scale_factor -= scale_increment;
+    }
+    return d;
+}
+
+float mj2x_strictmath_scalb_f32(float f, int32_t scale_factor)
+{
+    /* JDK 17 Math.scalb(float,int):MAX_SCALE = 127 + 125 + 24 + 1 = 277;
+     * float→double 精确加宽 + 2^scale 精确乘 + 单次 double→float 舍入。 */
+    static const int32_t kMaxScale = 127 + 125 + 24 + 1;
+    if (scale_factor > kMaxScale) scale_factor = kMaxScale;
+    if (scale_factor < -kMaxScale) scale_factor = -kMaxScale;
+    return (float)((double)f * mj2x_sm_f64_from_bits(
+        (uint64_t)(uint32_t)(scale_factor + 1023) << 52));
+}

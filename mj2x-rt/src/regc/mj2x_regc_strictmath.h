@@ -57,6 +57,76 @@ double mj2x_strictmath_rint(double value);
 double mj2x_strictmath_cbrt(double value);
 /// @}
 
+/// @name Math/StrictMath 补缺面(perf/regc-jni-hotpath):JDK 17 实源语义对齐。
+///
+/// @details
+/// Math 与 StrictMath 同签名共用同一 symbol(仓内既定口径):JDK 17 中
+/// Math.expm1/log1p/sinh/cosh/tanh/IEEEremainder 委派 StrictMath(fdlibm
+/// e_sinh/e_cosh/s_tanh/s_expm1/s_log1p/e_remainder 算法),ulp/getExponent/
+/// nextAfter/nextUp/nextDown/scalb 在 StrictMath 侧逐条转委派 Math(java.lang
+/// Math 位型实现),toDegrees/toRadians/fma/copySign 双方同语义。已核对的
+/// 已知残差:JDK 17 StrictMath.copySign 要求 NaN sign 按正数处理,而
+/// Math.copySign 不要求;共用实现取 Math 的位型语义(sign 位直取),NaN
+/// sign 入参下与 StrictMath 可观测分歧,与文件头"NaN 载荷"残差同类。
+/// 位精确前提同文件头注(逐运算 IEEE double 舍入,不收缩 FMA)。
+/// @{
+/// java.lang.Math/StrictMath.expm1(double):fdlibm s_expm1,exp(x)-1。
+double mj2x_strictmath_expm1(double value);
+/// java.lang.Math/StrictMath.log1p(double):fdlibm s_log1p,ln(1+x)。
+double mj2x_strictmath_log1p(double value);
+/// java.lang.Math/StrictMath.sinh(double):fdlibm e_sinh,expm1/exp 分段。
+double mj2x_strictmath_sinh(double value);
+/// java.lang.Math/StrictMath.cosh(double):fdlibm e_cosh,expm1/exp 分段。
+double mj2x_strictmath_cosh(double value);
+/// java.lang.Math/StrictMath.tanh(double):fdlibm s_tanh,expm1 分段。
+double mj2x_strictmath_tanh(double value);
+/// java.lang.Math/StrictMath.IEEEremainder(double,double):fdlibm
+/// e_remainder(x REM p,最近偶数商),依赖同文件 fmod 结构。
+double mj2x_strictmath_ieee_remainder(double x, double p);
+/// java.lang.Math/StrictMath.copySign(double,double):位型直取 sign 位
+/// (JDK 17 Math.copySign 位操作式)。
+double mj2x_strictmath_copy_sign_f64(double magnitude, double sign);
+/// java.lang.Math/StrictMath.copySign(float,float):位型直取 sign 位。
+float mj2x_strictmath_copy_sign_f32(float magnitude, float sign);
+/// java.lang.Math/StrictMath.toDegrees(double):JDK 17 常量乘式
+/// angrad * RADIANS_TO_DEGREES(57.29577951308232,180/pi 双舍入)。
+double mj2x_strictmath_to_degrees(double angrad);
+/// java.lang.Math/StrictMath.toRadians(double):JDK 17 常量乘式
+/// angdeg * DEGREES_TO_RADIANS(0.017453292519943295,pi/180 双舍入)。
+double mj2x_strictmath_to_radians(double angdeg);
+/// java.lang.Math/StrictMath.fma(double,double,double):C99 fma(),单次舍入。
+double mj2x_strictmath_fma_f64(double a, double b, double c);
+/// java.lang.Math/StrictMath.fma(float,float,float):C99 fmaf(),单次舍入。
+float mj2x_strictmath_fma_f32(float a, float b, float c);
+/// java.lang.Math/StrictMath.ulp(double):JDK 17 switch 公式(NaN→NaN、
+/// ±Inf→+Inf、0/次正规→MIN_VALUE、其余 2^(exp-52))。
+double mj2x_strictmath_ulp_f64(double value);
+/// java.lang.Math/StrictMath.ulp(float):JDK 17 switch 公式(float 版)。
+float mj2x_strictmath_ulp_f32(float value);
+/// java.lang.Math/StrictMath.getExponent(double):阶码位直取-bias
+/// (0/次正规→-1023,NaN/±Inf→1024)。
+int32_t mj2x_strictmath_get_exponent_f64(double value);
+/// java.lang.Math/StrictMath.getExponent(float):阶码位直取-bias(float 版)。
+int32_t mj2x_strictmath_get_exponent_f32(float value);
+/// java.lang.Math/StrictMath.nextAfter(double,double):JDK 17 位型
+/// 邻域实现(下降/上升分支,NaN 侧 start+direction)。
+double mj2x_strictmath_next_after_f64(double start, double direction);
+/// java.lang.Math/StrictMath.nextUp(double):位型 +1/-1 邻域。
+double mj2x_strictmath_next_up_f64(double value);
+/// java.lang.Math/StrictMath.nextUp(float):位型 +1/-1 邻域(float 版)。
+float mj2x_strictmath_next_up_f32(float value);
+/// java.lang.Math/StrictMath.nextDown(double):位型 -1/+1 邻域(0→-MIN_VALUE)。
+double mj2x_strictmath_next_down_f64(double value);
+/// java.lang.Math/StrictMath.nextDown(float):位型 -1/+1 邻域(float 版)。
+float mj2x_strictmath_next_down_f32(float value);
+/// java.lang.Math/StrictMath.scalb(double,int):JDK 17 乘法步进式
+/// (MAX_SCALE 夹取 + 2^mod512 单乘 + 2^±512 循环,至多一次真实舍入)。
+double mj2x_strictmath_scalb_f64(double value, int32_t scale_factor);
+/// java.lang.Math/StrictMath.scalb(float,int):JDK 17 double 加宽单乘
+/// 后单次舍回 float。
+float mj2x_strictmath_scalb_f32(float value, int32_t scale_factor);
+/// @}
+
 #ifdef __cplusplus
 }
 #endif

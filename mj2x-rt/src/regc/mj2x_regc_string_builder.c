@@ -185,6 +185,33 @@ static mj2x_regc_status mj2x_string_builder_string_bounds(mj2x_regc_context* con
     return MJ2X_REGC_STATUS_PENDING_EXCEPTION;
 }
 
+/* JDK 17 AbstractStringBuilder.checkRangeSIOOBE：delete/substring 的越界消息
+ * 逐字镜像（"start %d, end %d, length %d"）。 */
+static mj2x_regc_status mj2x_string_builder_range_bounds(mj2x_regc_context* context, int32_t start,
+                                                         int32_t end, int32_t length)
+{
+    char message[96];
+    snprintf(message,
+             sizeof message,
+             "start %d, end %d, length %d",
+             (int)start,
+             (int)end,
+             (int)length);
+    mj2x_regc_throw_exception(context, "java/lang/StringIndexOutOfBoundsException", message);
+    return MJ2X_REGC_STATUS_PENDING_EXCEPTION;
+}
+
+/* JDK 17 String.checkIndex（charAt/deleteCharAt 走此口径）：
+ * "index %d, length %d"。 */
+static mj2x_regc_status mj2x_string_builder_index_bounds(mj2x_regc_context* context, int32_t index,
+                                                         int32_t length)
+{
+    char message[64];
+    snprintf(message, sizeof message, "index %d, length %d", (int)index, (int)length);
+    mj2x_regc_throw_exception(context, "java/lang/StringIndexOutOfBoundsException", message);
+    return MJ2X_REGC_STATUS_PENDING_EXCEPTION;
+}
+
 static mj2x_regc_status mj2x_string_builder_append_ascii(mj2x_regc_context*   context,
                                                          mj2x_string_builder* state,
                                                          const char* text, const char* operation)
@@ -858,6 +885,181 @@ mj2x_regc_status mj2x_string_builder_set_char_at(mj2x_regc_context*   context,
     return MJ2X_REGC_STATUS_OK;
 }
 
+/* ---- JDK 17 AbstractStringBuilder 补充面：reverse/delete/deleteCharAt/
+ * substring/indexOf/lastIndexOf。语义逐点对齐 OpenJDK 17 源码：
+ * reverse 镜像 StringUTF16.reverse（先 code unit 整体反转，再交换相邻
+ * low+high 代理对，代理对整体保序）；delete 先把 end clamp 到 length 再
+ * checkRangeSIOOBE（start<0 || start>end）；deleteCharAt 走 String.checkIndex；
+ * substring 不 clamp（start<0 || start>end || end>length 抛）；indexOf/
+ * lastIndexOf 是 UTF-16 子串搜索（空 needle：前向 0 / 后向 length）。 ---- */
+
+mj2x_regc_status mj2x_string_builder_reverse(mj2x_regc_context*   context,
+                                             mj2x_string_builder* state)
+{
+    if (state == NULL) return mj2x_string_builder_invalid_state(context, "StringBuilder.reverse");
+    size_t left  = 0;
+    size_t right = state->length;
+    while (right > left + 1) {
+        const uint16_t unit  = state->units[left];
+        state->units[left]   = state->units[right - 1];
+        state->units[right - 1] = unit;
+        ++left;
+        --right;
+    }
+    for (size_t i = 0; i + 2 <= state->length; ++i) {
+        const uint16_t first  = state->units[i];
+        const uint16_t second = state->units[i + 1];
+        if (first >= 0xDC00u && first <= 0xDFFFu && second >= 0xD800u && second <= 0xDBFFu) {
+            state->units[i]     = second;
+            state->units[i + 1] = first;
+            ++i;
+        }
+    }
+    return MJ2X_REGC_STATUS_OK;
+}
+
+mj2x_regc_status mj2x_string_builder_delete_char_at(mj2x_regc_context*   context,
+                                                    mj2x_string_builder* state, int32_t index)
+{
+    const char* operation = "StringBuilder.deleteCharAt";
+    if (state == NULL) return mj2x_string_builder_invalid_state(context, operation);
+    if (index < 0 || (size_t)index >= state->length) {
+        return mj2x_string_builder_index_bounds(context, index, (int32_t)state->length);
+    }
+    memmove(state->units + index,
+            state->units + index + 1,
+            (state->length - (size_t)index - 1) * sizeof(uint16_t));
+    state->length -= 1;
+    return MJ2X_REGC_STATUS_OK;
+}
+
+mj2x_regc_status mj2x_string_builder_delete(mj2x_regc_context*   context,
+                                            mj2x_string_builder* state, int32_t start, int32_t end)
+{
+    const char* operation = "StringBuilder.delete";
+    if (state == NULL) return mj2x_string_builder_invalid_state(context, operation);
+    const int32_t length = (int32_t)state->length;
+    /* JDK 17 delete：end > length 先 clamp（不抛），再 checkRangeSIOOBE
+     * （clamp 后 end > length 不可能，条件退化为 start<0 || start>end，
+     * 消息含 clamp 后的 end）。 */
+    const int32_t clamped_end = end > length ? length : end;
+    if (start < 0 || start > clamped_end) {
+        return mj2x_string_builder_range_bounds(context, start, clamped_end, length);
+    }
+    const size_t count = (size_t)(clamped_end - start);
+    if (count > 0) {
+        memmove(state->units + start,
+                state->units + start + count,
+                (state->length - (size_t)start - count) * sizeof(uint16_t));
+        state->length -= count;
+    }
+    return MJ2X_REGC_STATUS_OK;
+}
+
+mj2x_regc_status mj2x_string_builder_substring_range(mj2x_regc_context*         context,
+                                                     const mj2x_string_builder* state,
+                                                     int32_t start, int32_t end,
+                                                     mj2x_ref*                  out_string)
+{
+    const char* operation = "StringBuilder.substring";
+    if (out_string == NULL) {
+        mj2x_regc_report_status(context, MJ2X_REGC_STATUS_INVALID_ARGUMENT, operation);
+        return MJ2X_REGC_STATUS_INVALID_ARGUMENT;
+    }
+    *out_string = NULL;
+    if (state == NULL) return mj2x_string_builder_invalid_state(context, operation);
+    /* JDK 17 substring：不 clamp，start<0 || start>end || end>length 抛
+     * checkRangeSIOOBE。 */
+    if (start < 0 || start > end || end > (int32_t)state->length) {
+        return mj2x_string_builder_range_bounds(context, start, end, (int32_t)state->length);
+    }
+    JNIEnv* env = mj2x_string_builder_env(context);
+    if (env == NULL) return mj2x_string_builder_invalid_state(context, operation);
+    const jchar  empty = 0;
+    const jchar* units = end == start ? &empty : state->units + start;
+    jstring      result = (*env)->NewString(env, units, (jsize)(end - start));
+    if (result == NULL) return mj2x_string_builder_pending_or_oom(context, env, operation);
+    *out_string = (mj2x_ref)result;
+    return MJ2X_REGC_STATUS_OK;
+}
+
+mj2x_regc_status mj2x_string_builder_substring_from(mj2x_regc_context*         context,
+                                                    const mj2x_string_builder* state,
+                                                    int32_t                    start,
+                                                    mj2x_ref*                  out_string)
+{
+    /* JDK 17 substring(start) == substring(start, length)。 */
+    return mj2x_string_builder_substring_range(
+        context, state, start, state == NULL ? 0 : (int32_t)state->length, out_string);
+}
+
+/* indexOf/lastIndexOf 共核：needle 为 null 时 JDK 在 String.indexOf 内部解引用
+ * 抛 NPE，这里镜像为 NPE 路由；空 needle 前向 0、后向 length（JDK
+ * lastIndexOf(str) == lastIndexOf(str, count) 口径）。搜索按 UTF-16 code
+ * unit 逐位比对（与 StringUTF16.indexOf 同语义，无 collation）。 */
+static mj2x_regc_status mj2x_string_builder_search(mj2x_regc_context*         context,
+                                                   const mj2x_string_builder* state,
+                                                   mj2x_ref needle, int reverse, int32_t* out_index)
+{
+    const char* operation = reverse ? "StringBuilder.lastIndexOf" : "StringBuilder.indexOf";
+    if (out_index == NULL) {
+        mj2x_regc_report_status(context, MJ2X_REGC_STATUS_INVALID_ARGUMENT, operation);
+        return MJ2X_REGC_STATUS_INVALID_ARGUMENT;
+    }
+    *out_index = -1;
+    if (state == NULL) return mj2x_string_builder_invalid_state(context, operation);
+    if (needle == NULL) {
+        mj2x_regc_throw_exception(context, "java/lang/NullPointerException", operation);
+        return MJ2X_REGC_STATUS_PENDING_EXCEPTION;
+    }
+    JNIEnv* env = mj2x_string_builder_env(context);
+    if (env == NULL) return mj2x_string_builder_invalid_state(context, operation);
+    const jsize needle_length = (*env)->GetStringLength(env, (jstring)needle);
+    if ((*env)->ExceptionCheck(env)) return MJ2X_REGC_STATUS_PENDING_EXCEPTION;
+    if (needle_length == 0) {
+        *out_index = reverse ? (int32_t)state->length : 0;
+        return MJ2X_REGC_STATUS_OK;
+    }
+    if ((size_t)needle_length > state->length) return MJ2X_REGC_STATUS_OK;
+    const jchar* needle_chars = (*env)->GetStringChars(env, (jstring)needle, NULL);
+    if (needle_chars == NULL) return mj2x_string_builder_pending_or_oom(context, env, operation);
+    const size_t last_start = state->length - (size_t)needle_length;
+    const size_t bytes      = (size_t)needle_length * sizeof(uint16_t);
+    if (!reverse) {
+        for (size_t i = 0; i <= last_start; ++i) {
+            if (memcmp(state->units + i, needle_chars, bytes) == 0) {
+                *out_index = (int32_t)i;
+                break;
+            }
+        }
+    }
+    else {
+        for (size_t i = last_start;; --i) {
+            if (memcmp(state->units + i, needle_chars, bytes) == 0) {
+                *out_index = (int32_t)i;
+                break;
+            }
+            if (i == 0) break;
+        }
+    }
+    (*env)->ReleaseStringChars(env, (jstring)needle, needle_chars);
+    return MJ2X_REGC_STATUS_OK;
+}
+
+mj2x_regc_status mj2x_string_builder_index_of(mj2x_regc_context*         context,
+                                              const mj2x_string_builder* state,
+                                              mj2x_ref needle, int32_t*   out_index)
+{
+    return mj2x_string_builder_search(context, state, needle, 0, out_index);
+}
+
+mj2x_regc_status mj2x_string_builder_last_index_of(mj2x_regc_context*         context,
+                                                   const mj2x_string_builder* state,
+                                                   mj2x_ref needle, int32_t*   out_index)
+{
+    return mj2x_string_builder_search(context, state, needle, 1, out_index);
+}
+
 size_t mj2x_string_builder_utf16_length(const mj2x_string_builder* state)
 {
     return state == NULL ? 0 : state->length;
@@ -1023,6 +1225,34 @@ MJ2X_BUFFER_WRAP_STATUS(mj2x_string_buffer_set_char_at, mj2x_string_builder_set_
                         (mj2x_regc_context * context, mj2x_string_buffer* state, int32_t index,
                          uint16_t value),
                         (context, builder, index, value))
+/* ---- JDK 17 补充面（reverse/delete/deleteCharAt/substring/indexOf/
+ * lastIndexOf）：持锁转发到 builder 实现，与 StringBuilder 语义逐点一致。 */
+MJ2X_BUFFER_WRAP_STATUS(mj2x_string_buffer_reverse, mj2x_string_builder_reverse,
+                        (mj2x_regc_context * context, mj2x_string_buffer* state),
+                        (context, builder))
+MJ2X_BUFFER_WRAP_STATUS(mj2x_string_buffer_delete_char_at, mj2x_string_builder_delete_char_at,
+                        (mj2x_regc_context * context, mj2x_string_buffer* state, int32_t index),
+                        (context, builder, index))
+MJ2X_BUFFER_WRAP_STATUS(mj2x_string_buffer_delete, mj2x_string_builder_delete,
+                        (mj2x_regc_context * context, mj2x_string_buffer* state, int32_t start,
+                         int32_t end),
+                        (context, builder, start, end))
+MJ2X_BUFFER_WRAP_STATUS(mj2x_string_buffer_substring_from, mj2x_string_builder_substring_from,
+                        (mj2x_regc_context * context, const mj2x_string_buffer* state,
+                         int32_t start, mj2x_ref* out_string),
+                        (context, builder, start, out_string))
+MJ2X_BUFFER_WRAP_STATUS(mj2x_string_buffer_substring_range, mj2x_string_builder_substring_range,
+                        (mj2x_regc_context * context, const mj2x_string_buffer* state,
+                         int32_t start, int32_t end, mj2x_ref* out_string),
+                        (context, builder, start, end, out_string))
+MJ2X_BUFFER_WRAP_STATUS(mj2x_string_buffer_index_of, mj2x_string_builder_index_of,
+                        (mj2x_regc_context * context, const mj2x_string_buffer* state,
+                         mj2x_ref needle, int32_t* out_index),
+                        (context, builder, needle, out_index))
+MJ2X_BUFFER_WRAP_STATUS(mj2x_string_buffer_last_index_of, mj2x_string_builder_last_index_of,
+                        (mj2x_regc_context * context, const mj2x_string_buffer* state,
+                         mj2x_ref needle, int32_t* out_index),
+                        (context, builder, needle, out_index))
 
 #undef MJ2X_BUFFER_WRAP_STATUS
 

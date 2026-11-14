@@ -279,6 +279,25 @@ MJ2X_REGC_API int32_t _mj2x_intrinsic_string_ends_with(mj2x_ref value, mj2x_ref 
 MJ2X_REGC_API int32_t _mj2x_intrinsic_string_index_of(mj2x_ref value, mj2x_ref needle);
 MJ2X_REGC_API extern jmethodID _mj2x_intrinsic_string_contains_method;
 MJ2X_REGC_API int32_t _mj2x_intrinsic_string_contains(mj2x_ref value, mj2x_ref seq);
+/// String intrinsic 第二批（JDK 17 语义镜像，语义清单见 runtime.c 实现处）：
+/// lastIndexOf 倒序扫描（fromIndex 越界 clamp 不抛，空 needle 命中 clamp 位）；
+/// substring/charAt 带 context（StringIndexOutOfBoundsException 经 context 回调，
+/// 消息 "begin X, end Y, length Z" / "index X, length Y"）；equals 对 null/非
+/// String 参数返回 false 不抛；hashCode 为 31*h+c 的 int 回绕；toCharArray 全量
+/// 拷贝；repeat 负 count 抛 IllegalArgumentException、总量超 INT32_MAX 抛
+/// OutOfMemoryError（均经 context 回调）。NULL 接收者/needle 与第一批同口径
+/// （_mj2x_regc_throw_null 置 pending NPE）。
+MJ2X_REGC_API int32_t _mj2x_intrinsic_string_last_index_of_char(mj2x_ref value, int32_t ch);
+MJ2X_REGC_API int32_t _mj2x_intrinsic_string_last_index_of_char_from(mj2x_ref value, int32_t ch, int32_t from_index);
+MJ2X_REGC_API int32_t _mj2x_intrinsic_string_last_index_of(mj2x_ref value, mj2x_ref needle);
+MJ2X_REGC_API int32_t _mj2x_intrinsic_string_last_index_of_from(mj2x_ref value, mj2x_ref needle, int32_t from_index);
+MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_string_substring(mj2x_regc_context* context, mj2x_ref value, int32_t begin_index);
+MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_string_substring_end(mj2x_regc_context* context, mj2x_ref value, int32_t begin_index, int32_t end_index);
+MJ2X_REGC_API uint16_t _mj2x_intrinsic_string_char_at(mj2x_regc_context* context, mj2x_ref value, int32_t index);
+MJ2X_REGC_API int32_t _mj2x_intrinsic_string_equals(mj2x_ref value, mj2x_ref other);
+MJ2X_REGC_API int32_t _mj2x_intrinsic_string_hash_code(mj2x_ref value);
+MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_string_to_char_array(mj2x_ref value);
+MJ2X_REGC_API mj2x_ref _mj2x_intrinsic_string_repeat(mj2x_regc_context* context, mj2x_ref value, int32_t count);
 MJ2X_REGC_API jobject _mj2x_regc_box_i32(int32_t value);
 MJ2X_REGC_API jobject _mj2x_regc_box_i64(int64_t value);
 /// 带小值缓存的包装类装箱（Integer/Long/Short/Byte 对 [-128,127]、Character

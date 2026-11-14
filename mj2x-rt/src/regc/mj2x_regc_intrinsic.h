@@ -219,6 +219,55 @@ int64_t mj2x_intrinsic_math_floor_div_i64(mj2x_regc_context* context, int64_t lh
 int32_t mj2x_intrinsic_math_floor_mod_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
 int64_t mj2x_intrinsic_math_floor_mod_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
 
+/// @brief java.lang.Math exact 溢出族（Math 专属，StrictMath 无对应）。
+///
+/// JDK 17 实源语义：溢出挂 pending ArithmeticException 并返回 0
+/// （RegCLocalHelper 形态，同 floorDiv 口径，调用后 ExceptionCheck 保留）。
+/// 消息逐字对齐 JDK 17 java.lang.Math 实源："integer overflow"（int 侧）/
+/// "long overflow"（long 侧）；absExact 在 JDK 17 的实源消息为
+/// "Overflow to represent absolute value of Integer.MIN_VALUE" /
+/// "Overflow to represent absolute value of Long.MIN_VALUE"（非
+/// integer/long overflow，JDK 19+ 才改短消息）。
+/// 实现全部先验条件判定（区间减法/除法哨兵），无 C 有符号溢出 UB。
+int32_t mj2x_intrinsic_math_add_exact_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
+int64_t mj2x_intrinsic_math_add_exact_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
+int32_t mj2x_intrinsic_math_subtract_exact_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
+int64_t mj2x_intrinsic_math_subtract_exact_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
+int32_t mj2x_intrinsic_math_multiply_exact_i32(mj2x_regc_context* context, int32_t lhs, int32_t rhs);
+int64_t mj2x_intrinsic_math_multiply_exact_i64(mj2x_regc_context* context, int64_t lhs, int64_t rhs);
+int32_t mj2x_intrinsic_math_increment_exact_i32(mj2x_regc_context* context, int32_t value);
+int64_t mj2x_intrinsic_math_increment_exact_i64(mj2x_regc_context* context, int64_t value);
+int32_t mj2x_intrinsic_math_decrement_exact_i32(mj2x_regc_context* context, int32_t value);
+int64_t mj2x_intrinsic_math_decrement_exact_i64(mj2x_regc_context* context, int64_t value);
+int32_t mj2x_intrinsic_math_negate_exact_i32(mj2x_regc_context* context, int32_t value);
+int64_t mj2x_intrinsic_math_negate_exact_i64(mj2x_regc_context* context, int64_t value);
+/// java.lang.Math.toIntExact(long)：窄化到 int 越界抛（消息 "integer overflow"）。
+int32_t mj2x_intrinsic_math_to_int_exact(mj2x_regc_context* context, int64_t value);
+/// java.lang.Math.absExact(int)：Integer.MIN_VALUE 抛（JDK 17 实源消息）。
+int32_t mj2x_intrinsic_math_abs_exact_i32(mj2x_regc_context* context, int32_t value);
+/// java.lang.Math.absExact(long)：Long.MIN_VALUE 抛（JDK 17 实源消息）。
+int64_t mj2x_intrinsic_math_abs_exact_i64(mj2x_regc_context* context, int64_t value);
+
+/// @brief Integer/Long.toString(int/long, int radix)：有符号 radix 版。
+///
+/// JDK 17 实源口径（Integer.toString(int,int)/Long.toString(long,int) 实源
+/// 核对）：radix < 2 或 > 36 不抛异常，静默回落 radix 10；负数带 '-' 前缀、
+/// 幅值无符号转换（Long.MIN_VALUE 幅值经 uint64 位型，无 UB）；数字小写
+/// （Character.forDigit）；0 输出 "0"。返回 NewStringUTF 的 local ref。
+/// RuntimeFunction + passContext 形态（同 toUnsignedString radix 版）。
+mj2x_ref mj2x_intrinsic_int_to_string_radix(mj2x_regc_context* context, int32_t value,
+                                            int32_t radix);
+mj2x_ref mj2x_intrinsic_long_to_string_radix(mj2x_regc_context* context, int64_t value,
+                                             int32_t radix);
+
+/// @brief Integer/Long.hashCode：JDK 17 实源公式，纯计算无异常通道。
+///
+/// Integer.hashCode(int) == value；Long.hashCode(long) ==
+/// (int)(value ^ (value >>> 32))，>>> 为 Java 无符号右移（uint64 位型域
+/// 计算、低 32 位截断）。
+int32_t mj2x_intrinsic_int_hash_code(int32_t value);
+int32_t mj2x_intrinsic_long_hash_code(int64_t value);
+
 /// @brief java.lang.Enum.name() / ordinal() 直接字段读取。
 ///
 /// 所有枚举类继承 java/lang/Enum 的 final 字段 name/ordinal，缓存的 jfieldID

@@ -915,3 +915,633 @@ void test_regc_intrinsic_DISABLED_round_f32_full_sweep(void)
            "total sum=0x%016llX xor=0x%08X\n",
            (unsigned long long)total_impl_sum, (unsigned)total_impl_xor);
 }
+
+// ---- Math exact 溢出族：边界 + 溢出 pending（JDK 17 消息逐字）----
+// 非溢出路径与普通运算逐位一致；溢出路径挂 pending ArithmeticException 并
+// 返回 0（RegCLocalHelper 形态语义锚点）。消息逐字对齐 JDK 17
+// java.lang.Math 实源："integer overflow" / "long overflow"；absExact 为
+// JDK 17 实源消息（JDK 19+ 才改短为 integer/long overflow）。
+void test_math_exact_family(void)
+{
+    scalar_thrown_exception thrown = {0, NULL, NULL};
+    mj2x_regc_context       context;
+    mj2x_regc_init_context(&context, &thrown, scalar_record_throw);
+
+    /* 非溢出路径值语义。 */
+    expect(mj2x_intrinsic_math_add_exact_i32(&context, 1, 2) == 3);
+    expect(mj2x_intrinsic_math_add_exact_i32(&context, INT32_MAX - 1, 1) == INT32_MAX);
+    expect(mj2x_intrinsic_math_add_exact_i32(&context, INT32_MIN, 1) == INT32_MIN + 1);
+    expect(mj2x_intrinsic_math_add_exact_i32(&context, INT32_MAX, INT32_MIN) == -1);
+    expect(mj2x_intrinsic_math_add_exact_i64(&context, INT64_MAX, INT64_MIN) == -1);
+    expect(mj2x_intrinsic_math_add_exact_i64(&context, INT64_C(1) << 40, INT64_C(1) << 40) ==
+           INT64_C(1) << 41);
+    expect(mj2x_intrinsic_math_subtract_exact_i32(&context, INT32_MIN, INT32_MAX) == 1);
+    expect(mj2x_intrinsic_math_subtract_exact_i32(&context, 5, 3) == 2);
+    expect(mj2x_intrinsic_math_subtract_exact_i32(&context, INT32_MIN + 1, 1) == INT32_MIN);
+    expect(mj2x_intrinsic_math_subtract_exact_i64(&context, INT64_MIN + 1, 1) == INT64_MIN);
+    expect(mj2x_intrinsic_math_multiply_exact_i32(&context, 3, 7) == 21);
+    expect(mj2x_intrinsic_math_multiply_exact_i32(&context, INT32_MIN, 1) == INT32_MIN);
+    expect(mj2x_intrinsic_math_multiply_exact_i32(&context, 0, INT32_MIN) == 0);
+    /* 2^16 * -2^15 = -2^31（int 恰好可表示）。 */
+    expect(mj2x_intrinsic_math_multiply_exact_i32(&context, 65536, -32768) == INT32_MIN);
+    expect(mj2x_intrinsic_math_multiply_exact_i64(&context, INT64_C(3), INT64_C(7)) == 21);
+    expect(mj2x_intrinsic_math_multiply_exact_i64(&context, INT64_MIN, 1) == INT64_MIN);
+    expect(mj2x_intrinsic_math_multiply_exact_i64(&context, 0, INT64_MIN) == 0);
+    /* -2^62 * 2 = -2^63 = INT64_MIN（恰可表示，除法哨兵下界边界）。 */
+    expect(mj2x_intrinsic_math_multiply_exact_i64(&context, -(INT64_C(1) << 62), 2) == INT64_MIN);
+    expect(mj2x_intrinsic_math_increment_exact_i32(&context, 41) == 42);
+    expect(mj2x_intrinsic_math_increment_exact_i32(&context, INT32_MAX - 1) == INT32_MAX);
+    expect(mj2x_intrinsic_math_increment_exact_i64(&context, INT64_MAX - 1) == INT64_MAX);
+    expect(mj2x_intrinsic_math_decrement_exact_i32(&context, INT32_MIN + 1) == INT32_MIN);
+    expect(mj2x_intrinsic_math_decrement_exact_i64(&context, INT64_MIN + 1) == INT64_MIN);
+    expect(mj2x_intrinsic_math_negate_exact_i32(&context, 5) == -5);
+    expect(mj2x_intrinsic_math_negate_exact_i32(&context, INT32_MAX) == INT32_MIN + 1);
+    expect(mj2x_intrinsic_math_negate_exact_i64(&context, INT64_MAX) == -INT64_MAX);
+    expect(mj2x_intrinsic_math_to_int_exact(&context, INT32_MAX) == INT32_MAX);
+    expect(mj2x_intrinsic_math_to_int_exact(&context, INT32_MIN) == INT32_MIN);
+    expect(mj2x_intrinsic_math_abs_exact_i32(&context, -5) == 5);
+    expect(mj2x_intrinsic_math_abs_exact_i32(&context, INT32_MAX) == INT32_MAX);
+    expect(mj2x_intrinsic_math_abs_exact_i64(&context, INT64_MIN + 1) == INT64_MAX);
+    expect(thrown.count == 0);
+
+    /* 溢出路径：pending ArithmeticException + 消息逐字。 */
+    expect(mj2x_intrinsic_math_add_exact_i32(&context, INT32_MAX, 1) == 0);
+    expect(thrown.count == 1);
+    expect(strcmp(thrown.class_name, "java/lang/ArithmeticException") == 0);
+    expect(strcmp(thrown.message, "integer overflow") == 0);
+    expect(mj2x_intrinsic_math_add_exact_i32(&context, INT32_MIN, -1) == 0);
+    expect(thrown.count == 2);
+    expect(mj2x_intrinsic_math_add_exact_i64(&context, INT64_MAX, 1) == 0);
+    expect(thrown.count == 3);
+    expect(strcmp(thrown.message, "long overflow") == 0);
+    expect(mj2x_intrinsic_math_add_exact_i64(&context, INT64_MIN, -1) == 0);
+    expect(thrown.count == 4);
+    expect(mj2x_intrinsic_math_subtract_exact_i32(&context, INT32_MIN, 1) == 0);
+    expect(thrown.count == 5);
+    expect(strcmp(thrown.message, "integer overflow") == 0);
+    expect(mj2x_intrinsic_math_subtract_exact_i32(&context, INT32_MAX, -1) == 0);
+    expect(thrown.count == 6);
+    expect(mj2x_intrinsic_math_subtract_exact_i64(&context, INT64_MIN, 1) == 0);
+    expect(thrown.count == 7);
+    expect(strcmp(thrown.message, "long overflow") == 0);
+    expect(mj2x_intrinsic_math_subtract_exact_i64(&context, INT64_MAX, -1) == 0);
+    expect(thrown.count == 8);
+    expect(mj2x_intrinsic_math_multiply_exact_i32(&context, INT32_MIN, -1) == 0);
+    expect(thrown.count == 9);
+    expect(strcmp(thrown.message, "integer overflow") == 0);
+    expect(mj2x_intrinsic_math_multiply_exact_i32(&context, INT32_MAX, 2) == 0);
+    expect(thrown.count == 10);
+    expect(mj2x_intrinsic_math_multiply_exact_i64(&context, INT64_MIN, -1) == 0);
+    expect(thrown.count == 11);
+    expect(strcmp(thrown.message, "long overflow") == 0);
+    expect(mj2x_intrinsic_math_multiply_exact_i64(&context, INT64_MAX, 2) == 0);
+    expect(thrown.count == 12);
+    /* 2^62 * 2 = 2^63 > INT64_MAX（除法哨兵上界边界）。 */
+    expect(mj2x_intrinsic_math_multiply_exact_i64(&context, INT64_C(1) << 62, 2) == 0);
+    expect(thrown.count == 13);
+    expect(mj2x_intrinsic_math_multiply_exact_i64(&context, INT64_MIN, 2) == 0);
+    expect(thrown.count == 14);
+    expect(mj2x_intrinsic_math_increment_exact_i32(&context, INT32_MAX) == 0);
+    expect(thrown.count == 15);
+    expect(strcmp(thrown.message, "integer overflow") == 0);
+    expect(mj2x_intrinsic_math_increment_exact_i64(&context, INT64_MAX) == 0);
+    expect(thrown.count == 16);
+    expect(strcmp(thrown.message, "long overflow") == 0);
+    expect(mj2x_intrinsic_math_decrement_exact_i32(&context, INT32_MIN) == 0);
+    expect(thrown.count == 17);
+    expect(strcmp(thrown.message, "integer overflow") == 0);
+    expect(mj2x_intrinsic_math_decrement_exact_i64(&context, INT64_MIN) == 0);
+    expect(thrown.count == 18);
+    expect(strcmp(thrown.message, "long overflow") == 0);
+    expect(mj2x_intrinsic_math_negate_exact_i32(&context, INT32_MIN) == 0);
+    expect(thrown.count == 19);
+    expect(strcmp(thrown.message, "integer overflow") == 0);
+    expect(mj2x_intrinsic_math_negate_exact_i64(&context, INT64_MIN) == 0);
+    expect(thrown.count == 20);
+    expect(strcmp(thrown.message, "long overflow") == 0);
+    expect(mj2x_intrinsic_math_to_int_exact(&context, (int64_t)INT32_MAX + 1) == 0);
+    expect(thrown.count == 21);
+    expect(strcmp(thrown.message, "integer overflow") == 0);
+    expect(mj2x_intrinsic_math_to_int_exact(&context, INT64_MIN) == 0);
+    expect(thrown.count == 22);
+    expect(mj2x_intrinsic_math_abs_exact_i32(&context, INT32_MIN) == 0);
+    expect(thrown.count == 23);
+    expect(strcmp(thrown.message,
+                  "Overflow to represent absolute value of Integer.MIN_VALUE") == 0);
+    expect(mj2x_intrinsic_math_abs_exact_i64(&context, INT64_MIN) == 0);
+    expect(thrown.count == 24);
+    expect(strcmp(thrown.message,
+                  "Overflow to represent absolute value of Long.MIN_VALUE") == 0);
+}
+
+/* 2^n / 2^n(f) 锚点助手（位型构造，指数面 1..1024/127 覆盖 float 最大界）。 */
+static double mj2x_sm_anchor_pow2(int n)
+{
+    uint64_t bits = (uint64_t)(uint32_t)(n + 1023) << 52;
+    double   value;
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+static float mj2x_sm_anchor_pow2f(int n)
+{
+    uint32_t bits = (uint32_t)(n + 127) << 23;
+    float    value;
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+// ---- StrictMath 补缺面（expm1/log1p/sinh/cosh/tanh/IEEEremainder）：锚点矩阵 ----
+// 期望值取 JDK/fdlibm 已知锚点（容差 1e-12）；特殊值（0/±Inf/NaN/-1）按
+// Javadoc/JDK 语义逐项断言，±0.0 用位型锁定符号。
+void test_strictmath_hyperbolic_additions(void)
+{
+    /* expm1：exp(x)-1。 */
+    expect(fabs(mj2x_strictmath_expm1(1.0) - 1.718281828459045) < 1e-12);
+    expect(fabs(mj2x_strictmath_expm1(-1.0) - (-0.6321205588285577)) < 1e-12);
+    expect(fabs(mj2x_strictmath_expm1(0.5) - 0.6487212707001282) < 1e-12);
+    expect(fabs(mj2x_strictmath_expm1(2.0) - 6.389056098930650) < 1e-12);
+    expect(fabs(mj2x_strictmath_expm1(-0.5) - (-0.3934693402873666)) < 1e-12);
+    expect(mj2x_strictmath_expm1(0.0) == 0.0);
+    {
+        const double nz = mj2x_strictmath_expm1(-0.0);
+        expect(nz == 0.0);
+        expect(signbit(nz)); /* -0.0 原样 */
+    }
+    expect(mj2x_strictmath_expm1(1e-20) == 1e-20); /* |x| < 2^-54 原样返回 */
+    expect(isinf(mj2x_strictmath_expm1(INFINITY)));
+    expect(mj2x_strictmath_expm1(-INFINITY) == -1.0);
+    expect(isnan(mj2x_strictmath_expm1(NAN)));
+    expect(isinf(mj2x_strictmath_expm1(710.0))); /* 溢出 → +Inf */
+
+    /* log1p：ln(1+x)。 */
+    expect(fabs(mj2x_strictmath_log1p(1.0) - 0.6931471805599453) < 1e-12);
+    expect(fabs(mj2x_strictmath_log1p(0.5) - 0.4054651081081644) < 1e-12);
+    expect(fabs(mj2x_strictmath_log1p(-0.5) - (-0.6931471805599453)) < 1e-12);
+    expect(fabs(mj2x_strictmath_log1p(10.0) - 2.3978952727983707) < 1e-12);
+    expect(mj2x_strictmath_log1p(1e-17) == 1e-17); /* 小参数原样 */
+    expect(mj2x_strictmath_log1p(0.0) == 0.0);
+    expect(isinf(mj2x_strictmath_log1p(INFINITY)));
+    expect(isinf(mj2x_strictmath_log1p(-1.0))); /* -Inf */
+    expect(isnan(mj2x_strictmath_log1p(-2.0))); /* x < -1 → NaN */
+    expect(isnan(mj2x_strictmath_log1p(NAN)));
+
+    /* sinh/cosh/tanh。 */
+    expect(fabs(mj2x_strictmath_sinh(1.0) - 1.1752011936438014) < 1e-12);
+    expect(fabs(mj2x_strictmath_sinh(2.0) - 3.6268604078470186) < 1e-12);
+    expect(fabs(mj2x_strictmath_sinh(0.5) - 0.5210953054937474) < 1e-12);
+    expect(mj2x_strictmath_sinh(-1.0) == -mj2x_strictmath_sinh(1.0));
+    {
+        const double sz = mj2x_strictmath_sinh(-0.0);
+        expect(sz == 0.0);
+        expect(signbit(sz)); /* sinh(-0.0) = -0.0 */
+    }
+    expect(isinf(mj2x_strictmath_sinh(INFINITY)));
+    expect(isinf(mj2x_strictmath_sinh(-INFINITY)));
+    expect(isnan(mj2x_strictmath_sinh(NAN)));
+    expect(fabs(mj2x_strictmath_cosh(1.0) - 1.5430806348152437) < 1e-12);
+    expect(fabs(mj2x_strictmath_cosh(2.0) - 3.7621956910836314) < 1e-12);
+    expect(fabs(mj2x_strictmath_cosh(0.5) - 1.1276259652063807) < 1e-12);
+    expect(mj2x_strictmath_cosh(0.0) == 1.0);
+    expect(mj2x_strictmath_cosh(-0.0) == 1.0);
+    expect(mj2x_strictmath_cosh(-1.0) == mj2x_strictmath_cosh(1.0));
+    expect(isinf(mj2x_strictmath_cosh(INFINITY)));
+    expect(isinf(mj2x_strictmath_cosh(-INFINITY)));
+    expect(isnan(mj2x_strictmath_cosh(NAN)));
+    expect(fabs(mj2x_strictmath_tanh(1.0) - 0.7615941559557649) < 1e-12);
+    expect(fabs(mj2x_strictmath_tanh(2.0) - 0.9640275800656498) < 1e-12);
+    expect(fabs(mj2x_strictmath_tanh(0.5) - 0.4621171572600098) < 1e-12);
+    expect(mj2x_strictmath_tanh(-1.0) == -mj2x_strictmath_tanh(1.0));
+    expect(mj2x_strictmath_tanh(0.0) == 0.0);
+    expect(mj2x_strictmath_tanh(23.0) == 1.0);  /* |x| > 22 → ±1 */
+    expect(mj2x_strictmath_tanh(-23.0) == -1.0);
+    expect(mj2x_strictmath_tanh(INFINITY) == 1.0);
+    expect(mj2x_strictmath_tanh(-INFINITY) == -1.0);
+    expect(isnan(mj2x_strictmath_tanh(NAN)));
+
+    /* IEEEremainder：x REM p（最近偶数商），余数符号随被除数。 */
+    expect(mj2x_strictmath_ieee_remainder(10.0, 6.0) == -2.0);
+    expect(mj2x_strictmath_ieee_remainder(9.0, 5.0) == -1.0);
+    expect(mj2x_strictmath_ieee_remainder(5.0, 3.0) == -1.0);
+    expect(mj2x_strictmath_ieee_remainder(6.0, 3.0) == 0.0);
+    expect(mj2x_strictmath_ieee_remainder(7.0, 5.0) == 2.0);
+    expect(mj2x_strictmath_ieee_remainder(10.5, 3.75) == -0.75);
+    expect(mj2x_strictmath_ieee_remainder(3.5, 2.0) == -0.5);  /* tie → 偶商 2 */
+    expect(mj2x_strictmath_ieee_remainder(-3.5, 2.0) == 0.5);  /* 符号随被除数 */
+    expect(mj2x_strictmath_ieee_remainder(2.5, 2.0) == 0.5);   /* tie → 偶商 2 */
+    expect(mj2x_strictmath_ieee_remainder(5.0, INFINITY) == 5.0);
+    expect(mj2x_strictmath_ieee_remainder(-5.0, INFINITY) == -5.0);
+    expect(isnan(mj2x_strictmath_ieee_remainder(5.0, 0.0)));
+    expect(isnan(mj2x_strictmath_ieee_remainder(INFINITY, 2.0)));
+    expect(isnan(mj2x_strictmath_ieee_remainder(NAN, 2.0)));
+    expect(isnan(mj2x_strictmath_ieee_remainder(2.0, NAN)));
+    {
+        const double rz = mj2x_strictmath_ieee_remainder(-0.0, 3.0);
+        expect(rz == 0.0);
+        expect(signbit(rz)); /* 零余数符号随被除数 */
+    }
+}
+
+// ---- Math/StrictMath 位型补缺面（copySign/toDegrees/toRadians/fma/ulp/
+// getExponent/nextAfter/nextUp/nextDown/scalb）：期望位型 = JDK 17 公式
+// 推导值，位型断言锁定；±0.0/NaN/Inf 行为逐项覆盖。----
+void test_math_bitwise_additions(void)
+{
+    /* copySign：sign 位直取，±0.0 位型。 */
+    expect(mj2x_strictmath_copy_sign_f64(5.0, -3.0) == -5.0);
+    expect(mj2x_strictmath_copy_sign_f64(-5.0, 3.0) == 5.0);
+    expect(mj2x_strictmath_copy_sign_f64(5.0, -0.0) == -5.0);
+    expect(mj2x_strictmath_copy_sign_f64(-5.0, 0.0) == 5.0);
+    {
+        const double pz = 0.0, nz = -0.0;
+        const double r1 = mj2x_strictmath_copy_sign_f64(pz, nz);
+        const double r2 = mj2x_strictmath_copy_sign_f64(nz, pz);
+        const double r3 = mj2x_strictmath_copy_sign_f64(nz, -1.0);
+        expect(memcmp(&r1, &nz, sizeof nz) == 0);
+        expect(memcmp(&r2, &pz, sizeof pz) == 0);
+        expect(memcmp(&r3, &nz, sizeof nz) == 0);
+        const float pfz = 0.0f, nfz = -0.0f;
+        const float f1 = mj2x_strictmath_copy_sign_f32(5.0f, -3.0f);
+        const float f2 = mj2x_strictmath_copy_sign_f32(pfz, nfz);
+        const float f3 = mj2x_strictmath_copy_sign_f32(nfz, pfz);
+        expect(f1 == -5.0f);
+        expect(memcmp(&f2, &nfz, sizeof nfz) == 0);
+        expect(memcmp(&f3, &pfz, sizeof pfz) == 0);
+    }
+
+    /* toDegrees/toRadians：JDK 17 常量乘式锚点。 */
+    expect(fabs(mj2x_strictmath_to_degrees(3.141592653589793) - 180.0) < 1e-9);
+    expect(fabs(mj2x_strictmath_to_degrees(1.5707963267948966) - 90.0) < 1e-9);
+    expect(mj2x_strictmath_to_degrees(0.0) == 0.0);
+    expect(fabs(mj2x_strictmath_to_radians(180.0) - 3.141592653589793) < 1e-12);
+    expect(fabs(mj2x_strictmath_to_radians(90.0) - 1.5707963267948966) < 1e-12);
+    expect(mj2x_strictmath_to_radians(0.0) == 0.0);
+
+    /* fma：单次舍入。 */
+    expect(mj2x_strictmath_fma_f64(2.0, 3.0, 4.0) == 10.0);
+    /* 精度锚点：精确积 2^1024 加 -2^1023，单次舍入 = 2^1023（裸乘会溢出 Inf）。 */
+    {
+        const double p1023 = mj2x_sm_anchor_pow2(1023);
+        const float  fp1023 = mj2x_sm_anchor_pow2f(127);
+        expect(mj2x_strictmath_fma_f64(2.0, p1023, -p1023) == p1023);
+        expect(isinf(2.0 * p1023)); /* 对照：裸乘路径确实发散 */
+        expect(mj2x_strictmath_fma_f32(2.0f, fp1023, -fp1023) == fp1023);
+    }
+    expect(mj2x_strictmath_fma_f64(1.5, 1.0, 2.25) == 3.75); /* fma(a,1,c)=a+c */
+    {
+        const double rz = mj2x_strictmath_fma_f64(-0.0, 0.0, 0.0);
+        expect(rz == 0.0);
+        expect(!signbit(rz)); /* fma(-0,+0,+0) = +0（JDK 特例） */
+    }
+    expect(isnan(mj2x_strictmath_fma_f64(1.0, 2.0, NAN)));
+    expect(isnan(mj2x_strictmath_fma_f64(INFINITY, 0.0, 1.0)));
+    expect(isnan(mj2x_strictmath_fma_f32(0.0f, INFINITY, 1.0f)));
+
+    /* ulp：位型锚点。 */
+    {
+        double   got;
+        uint64_t bits;
+        got = mj2x_strictmath_ulp_f64(1.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x3CB0000000000000)); /* 2^-52 */
+        got = mj2x_strictmath_ulp_f64(2.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x3CC0000000000000)); /* 2^-51 */
+        got = mj2x_strictmath_ulp_f64(0.5);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x3CA0000000000000)); /* 2^-53 */
+        got = mj2x_strictmath_ulp_f64(0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(1));                  /* MIN_VALUE */
+        got = mj2x_strictmath_ulp_f64(-0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(1));
+        got = mj2x_strictmath_ulp_f64(4.9e-324);      /* MIN_VALUE 自身 */
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(1));
+        got = mj2x_strictmath_ulp_f64(2.2250738585072014e-308); /* 2^-1022 */
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(1));
+        got = mj2x_strictmath_ulp_f64(4.4501477170144023e-308); /* 2^-1021 */
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(2));                  /* 2^-1073 */
+        got = mj2x_strictmath_ulp_f64(1.7976931348623157e308); /* MAX_VALUE */
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7CA0000000000000)); /* 2^971 */
+        got = mj2x_strictmath_ulp_f64(1e300);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7AF0000000000000)); /* 2^944 */
+        expect(isnan(mj2x_strictmath_ulp_f64(NAN)));
+        got = mj2x_strictmath_ulp_f64(INFINITY);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FF0000000000000));
+        got = mj2x_strictmath_ulp_f64(-INFINITY);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FF0000000000000));
+    }
+    {
+        float    got;
+        uint32_t bits;
+        got = mj2x_strictmath_ulp_f32(1.0f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0x34000000)); /* 2^-23 */
+        got = mj2x_strictmath_ulp_f32(0.0f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(1));          /* Float.MIN_VALUE */
+        got = mj2x_strictmath_ulp_f32(1.4e-45f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(1));
+        got = mj2x_strictmath_ulp_f32(2.8e-45f); /* 2×MIN_VALUE */
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(2));
+        got = mj2x_strictmath_ulp_f32(3.4028235e38f); /* Float.MAX_VALUE */
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0x73800000)); /* 2^104 */
+        expect(isnan(mj2x_strictmath_ulp_f32(NAN)));
+        got = mj2x_strictmath_ulp_f32(INFINITY);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0x7F800000));
+    }
+
+    /* getExponent：阶码位直取。 */
+    expect(mj2x_strictmath_get_exponent_f64(1.0) == 0);
+    expect(mj2x_strictmath_get_exponent_f64(2.0) == 1);
+    expect(mj2x_strictmath_get_exponent_f64(0.5) == -1);
+    expect(mj2x_strictmath_get_exponent_f64(-2.0) == 1);
+    expect(mj2x_strictmath_get_exponent_f64(4.9e-324) == -1023);   /* 次正规 */
+    expect(mj2x_strictmath_get_exponent_f64(2.2250738585072014e-308) == -1022);
+    expect(mj2x_strictmath_get_exponent_f64(1.7976931348623157e308) == 1023);
+    expect(mj2x_strictmath_get_exponent_f64(INFINITY) == 1024);
+    expect(mj2x_strictmath_get_exponent_f64(-INFINITY) == 1024);
+    expect(mj2x_strictmath_get_exponent_f64(NAN) == 1024);
+    expect(mj2x_strictmath_get_exponent_f32(1.0f) == 0);
+    expect(mj2x_strictmath_get_exponent_f32(4.0f) == 2);
+    expect(mj2x_strictmath_get_exponent_f32(1.4e-45f) == -127);    /* 次正规 */
+    expect(mj2x_strictmath_get_exponent_f32(1.17549435e-38f) == -126); /* 2^-126 */
+    expect(mj2x_strictmath_get_exponent_f32(3.4028235e38f) == 127);
+    expect(mj2x_strictmath_get_exponent_f32(INFINITY) == 128);
+    expect(mj2x_strictmath_get_exponent_f32(NAN) == 128);
+
+    /* nextAfter：位型锚点。 */
+    {
+        double   got;
+        uint64_t bits;
+        got = mj2x_strictmath_next_after_f64(1.0, 2.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x3FF0000000000001));
+        got = mj2x_strictmath_next_after_f64(1.0, 0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x3FEFFFFFFFFFFFFF));
+        got = mj2x_strictmath_next_after_f64(0.0, -1.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x8000000000000001)); /* -MIN_VALUE */
+        got = mj2x_strictmath_next_after_f64(-0.0, 1.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(1));                  /* MIN_VALUE */
+        got = mj2x_strictmath_next_after_f64(4.9e-324, 0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0));                  /* +0.0 */
+        got = mj2x_strictmath_next_after_f64(-4.9e-324, 0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x8000000000000000)); /* -0.0 */
+        got = mj2x_strictmath_next_after_f64(1.7976931348623157e308, INFINITY);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FF0000000000000)); /* +Inf */
+        got = mj2x_strictmath_next_after_f64(INFINITY, 1.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FEFFFFFFFFFFFFF)); /* MAX_VALUE */
+        got = mj2x_strictmath_next_after_f64(-INFINITY, -1.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0xFFEFFFFFFFFFFFFF)); /* -MAX_VALUE */
+        expect(mj2x_strictmath_next_after_f64(1.0, 1.0) == 1.0);
+        {
+            const double sz = mj2x_strictmath_next_after_f64(0.0, -0.0);
+            expect(sz == 0.0);
+            expect(signbit(sz)); /* 相等时返回 direction = -0.0 */
+        }
+        expect(isnan(mj2x_strictmath_next_after_f64(NAN, 1.0)));
+        expect(isnan(mj2x_strictmath_next_after_f64(1.0, NAN)));
+        expect(fabs(mj2x_strictmath_next_after_f64(2.5, 3.5) - 2.5000000000000004) < 1e-15);
+    }
+
+    /* nextUp/nextDown：位型锚点。 */
+    {
+        double   got;
+        uint64_t bits;
+        got = mj2x_strictmath_next_up_f64(1.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x3FF0000000000001));
+        got = mj2x_strictmath_next_up_f64(0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(1));
+        got = mj2x_strictmath_next_up_f64(-0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(1));
+        got = mj2x_strictmath_next_up_f64(-4.9e-324);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x8000000000000000)); /* -0.0 */
+        got = mj2x_strictmath_next_up_f64(1.7976931348623157e308);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FF0000000000000)); /* +Inf */
+        got = mj2x_strictmath_next_up_f64(-INFINITY);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0xFFEFFFFFFFFFFFFF)); /* -MAX_VALUE */
+        expect(isinf(mj2x_strictmath_next_up_f64(INFINITY)));
+        expect(isnan(mj2x_strictmath_next_up_f64(NAN)));
+        got = mj2x_strictmath_next_down_f64(1.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x3FEFFFFFFFFFFFFF));
+        got = mj2x_strictmath_next_down_f64(0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x8000000000000001)); /* -MIN_VALUE */
+        got = mj2x_strictmath_next_down_f64(-0.0);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x8000000000000001));
+        got = mj2x_strictmath_next_down_f64(1.7976931348623157e308);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FEFFFFFFFFFFFFE));
+        got = mj2x_strictmath_next_down_f64(4.9e-324);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0));                  /* +0.0 */
+        got = mj2x_strictmath_next_down_f64(-1.7976931348623157e308);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0xFFF0000000000000)); /* -Inf */
+        expect(isinf(mj2x_strictmath_next_down_f64(-INFINITY)));
+        expect(isnan(mj2x_strictmath_next_down_f64(NAN)));
+    }
+    {
+        float    got;
+        uint32_t bits;
+        got = mj2x_strictmath_next_up_f32(1.0f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0x3F800001));
+        got = mj2x_strictmath_next_up_f32(0.0f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(1));
+        got = mj2x_strictmath_next_up_f32(-0.0f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(1));
+        got = mj2x_strictmath_next_up_f32(3.4028235e38f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0x7F800000)); /* +Inf */
+        expect(isnan(mj2x_strictmath_next_up_f32(NAN)));
+        got = mj2x_strictmath_next_down_f32(1.0f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0x3F7FFFFF));
+        got = mj2x_strictmath_next_down_f32(0.0f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0x80000001)); /* -MIN_VALUE */
+        got = mj2x_strictmath_next_down_f32(1.4e-45f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0));          /* +0.0 */
+        got = mj2x_strictmath_next_down_f32(-3.4028235e38f);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0xFF800000)); /* -Inf */
+        expect(isnan(mj2x_strictmath_next_down_f32(NAN)));
+    }
+
+    /* scalb：JDK 17 乘法步进式。 */
+    expect(mj2x_strictmath_scalb_f64(1.0, 10) == 1024.0);
+    expect(mj2x_strictmath_scalb_f64(1.0, 0) == 1.0);
+    expect(mj2x_strictmath_scalb_f64(2.5, 4) == 40.0);
+    expect(mj2x_strictmath_scalb_f64(1.0, -10) == 0.0009765625);
+    expect(isinf(mj2x_strictmath_scalb_f64(1.7976931348623157e308, 1)));
+    expect(isinf(mj2x_strictmath_scalb_f64(1.0, 1024)));
+    expect(isinf(mj2x_strictmath_scalb_f64(1.0, 2099)));
+    {
+        double   got;
+        uint64_t bits;
+        got = mj2x_strictmath_scalb_f64(1.0, -1022);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x0010000000000000)); /* 2^-1022 */
+        got = mj2x_strictmath_scalb_f64(1.0, -1074);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(1));                  /* MIN_VALUE */
+        got = mj2x_strictmath_scalb_f64(3.0, -1074);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(3));                  /* 3×MIN_VALUE 次正规精确 */
+        got = mj2x_strictmath_scalb_f64(4.9e-324, 1);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(2));                  /* 2^-1073 */
+        got = mj2x_strictmath_scalb_f64(1.0, -3000);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0));                  /* 下溢 → 0 */
+        got = mj2x_strictmath_scalb_f64(1.0, 2147483647);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x7FF0000000000000)); /* 上溢 → +Inf */
+        got = mj2x_strictmath_scalb_f64(1.0, -2147483648);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0));                  /* 下溢 → 0 */
+        got = mj2x_strictmath_scalb_f64(-0.0, 100);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT64_C(0x8000000000000000)); /* -0.0 原样 */
+    }
+    expect(isnan(mj2x_strictmath_scalb_f64(NAN, 5)));
+    expect(isinf(mj2x_strictmath_scalb_f64(INFINITY, -5)));
+    expect(mj2x_strictmath_scalb_f64(INFINITY, 5) == INFINITY);
+    expect(mj2x_strictmath_scalb_f32(1.0f, 10) == 1024.0f);
+    expect(mj2x_strictmath_scalb_f32(1.0f, 0) == 1.0f);
+    expect(isinf(mj2x_strictmath_scalb_f32(1.0f, 128)));
+    expect(isinf(mj2x_strictmath_scalb_f32(3.4028235e38f, 1)));
+    {
+        float    got;
+        uint32_t bits;
+        got = mj2x_strictmath_scalb_f32(1.0f, -149);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(1));          /* Float.MIN_VALUE */
+        got = mj2x_strictmath_scalb_f32(3.0f, -149);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(3));          /* 3×MIN_VALUE 精确 */
+        got = mj2x_strictmath_scalb_f32(1.0f, -300);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0));          /* 下溢 → 0 */
+        got = mj2x_strictmath_scalb_f32(1.0f, 2147483647);
+        memcpy(&bits, &got, sizeof bits);
+        expect(bits == UINT32_C(0x7F800000)); /* 上溢 → +Inf */
+    }
+    expect(isnan(mj2x_strictmath_scalb_f32(NAN, 5)));
+    expect(isinf(mj2x_strictmath_scalb_f32(INFINITY, -5)));
+}
+
+// ---- Integer/Long.toString(radix) + hashCode ----
+// toString 走 fake JNIEnv（NewStringUTF 拷贝进静态缓冲，内容可直接 strcmp），
+// 断言不挂异常（JDK 17 实源口径：非法 radix 静默回落 10）。
+static char tostring_fake_buffer[128];
+
+static jstring JNICALL tostring_fake_new_string_utf(JNIEnv* env, const char* bytes)
+{
+    (void)env;
+    strncpy(tostring_fake_buffer, bytes, sizeof(tostring_fake_buffer) - 1);
+    tostring_fake_buffer[sizeof(tostring_fake_buffer) - 1] = '\0';
+    return (jstring)tostring_fake_buffer;
+}
+
+void test_intlong_tostring_radix_hash_code(void)
+{
+    static struct JNINativeInterface_ tostring_table;
+    static JNIEnv                     tostring_env = &tostring_table;
+    tostring_table.NewStringUTF       = tostring_fake_new_string_utf;
+
+    scalar_thrown_exception thrown = {0, NULL, NULL};
+    mj2x_regc_context       context;
+    mj2x_regc_init_context(&context, &tostring_env, scalar_record_throw);
+
+    /* Integer.toString(i, radix)：小写 digits、负数 '-' 前缀、非法 radix
+     * 静默回落 10（JDK 17 实源口径）。 */
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 255, 16), "ff") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 255, 2), "11111111") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 255, 8), "377") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 255, 36), "73") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 305419896, 16),
+                  "1234abcd") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, -255, 16), "-ff") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, -2147483647, 10),
+                  "-2147483647") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 0, 10), "0") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 0, 2), "0") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, INT32_MIN, 10),
+                  "-2147483648") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, INT32_MIN, 16),
+                  "-80000000") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, INT32_MIN, 8),
+                  "-20000000000") == 0);
+    /* 非法 radix（<2 或 >36）：JDK 17 不抛、回落 10。 */
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 7, 1), "7") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 7, 37), "7") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 7, -3), "7") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_int_to_string_radix(&context, 12345, 10), "12345") == 0);
+    expect(thrown.count == 0);
+
+    /* Long.toString(l, radix)。 */
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, 255L, 16), "ff") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, -1L, 8), "-1") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, -2L, 10), "-2") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, 0L, 2), "0") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, INT64_MIN, 10),
+                  "-9223372036854775808") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, INT64_MIN, 16),
+                  "-8000000000000000") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, INT64_MIN, 8),
+                  "-1000000000000000000000") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, INT64_MAX, 16),
+                  "7fffffffffffffff") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, -255L, 36), "-73") == 0);
+    expect(strcmp((const char*)mj2x_intrinsic_long_to_string_radix(&context, 5L, 0), "5") == 0);
+    expect(thrown.count == 0);
+
+    /* hashCode：JDK 17 实源公式（期望值 = 公式手工推导）。 */
+    expect(mj2x_intrinsic_int_hash_code(123) == 123);
+    expect(mj2x_intrinsic_int_hash_code(0) == 0);
+    expect(mj2x_intrinsic_int_hash_code(-7) == -7);
+    expect(mj2x_intrinsic_int_hash_code(INT32_MIN) == INT32_MIN);
+    expect(mj2x_intrinsic_long_hash_code(0) == 0);
+    expect(mj2x_intrinsic_long_hash_code(1) == 1);
+    expect(mj2x_intrinsic_long_hash_code(-1) == 0);
+    expect(mj2x_intrinsic_long_hash_code(INT64_C(0x123456789ABCDEF0)) == -2004318072);
+    expect(mj2x_intrinsic_long_hash_code(INT64_C(4294967296)) == 1);
+    expect(mj2x_intrinsic_long_hash_code(INT64_C(1234567890123)) == 1912276436);
+    expect(mj2x_intrinsic_long_hash_code(INT64_MIN) == INT32_MIN);
+    /* INT64_MAX ^ (INT64_MAX >>> 32) = 0x7FFFFFFF80000000 → 低 32 位 0x80000000。 */
+    expect(mj2x_intrinsic_long_hash_code(INT64_MAX) == INT32_MIN);
+    expect(thrown.count == 0);
+}
