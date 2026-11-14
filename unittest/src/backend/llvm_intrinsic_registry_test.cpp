@@ -477,15 +477,17 @@ TEST(LlvmIntrinsicRegistryGoldenCross, DerivedSurfaceMatchesLlvmDirectBit)
     // 单源一致性：权威表 llvmDirect 计数 == 五张派生表条目和（27+8+8+7+48=98，
     // 其中 Math 面 #1117 由 21 增至 27）。StrictMath 位精确 12 条与 Math 边缘
     // 8 条(rint/floorDiv×2/floorMod×2/hypot/cbrt/atan2)全为 llvmDirect=false,
-    // 派生面计数不变,仅总数 213 增至 233；后续补面（String 11 +
-    // StringBuilder/StringBuffer mutate/search 各 7 + System 时钟 2 +
-    // Objects.requireNonNull 2 + Math/StrictMath 46 + exact 族 15 +
-    // Integer/Long 4）再增 94 条全 llvmDirect=false,总数 233 增至 327。
+    // 派生面计数不变,仅总数 213 增至 233；后续补面（StringBuilder/StringBuffer
+    // mutate/search 各 7 + System 时钟 2 + Objects.requireNonNull 2 +
+    // Math/StrictMath 46 + exact 族 15 + Integer/Long 4）再增 83 条全
+    // llvmDirect=false,总数 233 增至 316。String 实例方法（charAt/equals/
+    // hashCode/substring 等）不注册 intrinsic：多 JNI 数据管道劣于 1-JNI
+    // 缓存 methodID 的 JDK 调用（HotSpot 对部分方法有 VM intrinsic）。
     size_t direct = 0;
     for (const auto& id : builtinIntrinsicTable()) {
         if (id.llvmDirect) ++direct;
     }
-    EXPECT_EQ(builtinIntrinsicTable().size(), 327u);
+    EXPECT_EQ(builtinIntrinsicTable().size(), 316u);
     EXPECT_EQ(direct, sizeOf(kGoldenMath) + sizeOf(kGoldenBox) + sizeOf(kGoldenUnbox) +
                           sizeOf(kGoldenRandom) + sizeOf(kGoldenBuilder));
 }

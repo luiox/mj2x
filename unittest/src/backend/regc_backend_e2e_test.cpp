@@ -230,6 +230,7 @@ protected:
         compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
         compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
         compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
+        compileCrt("regc/mj2x_regc_sys.c", "mj2x_regc_sys.obj");
         // 权威 wrapper/Math/Random/位操作 intrinsic 全部在 crt 的
         // mj2x_regc_intrinsic.c（可分发 C99 版，生成工程同源）；runtime 的
         // intrinsic_wrapper/intrinsic_math/intrinsic_random 是历史 in-tree 版，
@@ -1477,6 +1478,7 @@ TEST_F(RegCBackendE2E, IndyDirectNullReceiverRoutesToHandlerRoundTrip)
     compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
     compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
     compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
+    compileCrt("regc/mj2x_regc_sys.c", "mj2x_regc_sys.obj");
     compileCrt("regc/mj2x_regc_intrinsic.c", "mj2x_regc_intrinsic.obj");
 
     std::string linkLine = "link /nologo /DLL /OUT:" + q(dll) + " " + q(generatedObj);
@@ -2430,106 +2432,6 @@ TEST_F(RegCBackendE2E, ScalarIntrinsicsRoundTrip)
 /// String intrinsic 第二批（perf/regc-jni-hotpath）exec 级验证：lastIndexOf
 /// 命中/未命中/带 fromIndex（含负与超界 clamp、空 needle）、substring 正常/
 /// 越界/反序 catch StringIndexOutOfBoundsException、charAt 正常/越界/负、
-/// equals 同/异/null/非 String、hashCode 已知值（"hello"=99162322）、
-/// toCharArray 内容、repeat 正常/0/1/负数 catch IllegalArgumentException。
-/// 全部输出 int 化结果（THROW: 通道仅类名），基准 JVM 与 protected 逐行比对。
-TEST_F(RegCBackendE2E, StringIntrinsicsBatchRoundTrip)
-{
-    runCase(
-        "RegCStringBatch",
-        "public class RegCStringBatch {\n"
-        "  public static int lastIndexOfChar(String s) {\n"
-        "    return s.lastIndexOf('l') * 10 + s.lastIndexOf('z');\n"
-        "  }\n"
-        "  public static int lastIndexOfCharFrom(String s) {\n"
-        "    return s.lastIndexOf('l', 3) + s.lastIndexOf('l', 0)\n"
-        "        + s.lastIndexOf('l', -1) + s.lastIndexOf('l', 99);\n"
-        "  }\n"
-        "  public static int lastIndexOfStr(String s) {\n"
-        "    return s.lastIndexOf(\"lo\") * 10 + s.lastIndexOf(\"zz\");\n"
-        "  }\n"
-        "  public static int lastIndexOfStrFrom(String s) {\n"
-        "    return s.lastIndexOf(\"l\", 4) + s.lastIndexOf(\"l\", 0)\n"
-        "        + s.lastIndexOf(\"l\", -1) + s.lastIndexOf(\"\", 2);\n"
-        "  }\n"
-        "  public static int substringOk(String s) {\n"
-        "    return s.substring(2).length() * 10 + s.substring(1, 4).length();\n"
-        "  }\n"
-        "  public static int substringEmpty(String s) {\n"
-        "    return s.substring(5).length() + s.substring(1, 1).length();\n"
-        "  }\n"
-        "  public static String substringOob(String s) {\n"
-        "    try { return s.substring(9); }\n"
-        "    catch (StringIndexOutOfBoundsException e) { return \"SIOOBE\"; }\n"
-        "  }\n"
-        "  public static String substringReverse(String s) {\n"
-        "    try { return s.substring(3, 1); }\n"
-        "    catch (StringIndexOutOfBoundsException e) { return \"SIOOBE\"; }\n"
-        "  }\n"
-        "  public static int charAtOk(String s) {\n"
-        "    return s.charAt(0) + s.charAt(4);\n"
-        "  }\n"
-        "  public static String charAtOob(String s) {\n"
-        "    try { return String.valueOf(s.charAt(9)); }\n"
-        "    catch (StringIndexOutOfBoundsException e) { return \"SIOOBE\"; }\n"
-        "  }\n"
-        "  public static int charAtNeg(String s) {\n"
-        "    try { return s.charAt(-1); }\n"
-        "    catch (StringIndexOutOfBoundsException e) { return -3; }\n"
-        "  }\n"
-        "  public static int equalsSame(String s) { return s.equals(s) ? 1 : 0; }\n"
-        "  public static int equalsDiff(String s) { return s.equals(\"world\") ? 1 : 0; }\n"
-        "  public static int equalsNullArg(String s, Object o) { return s.equals(o) ? 1 : 0; }\n"
-        "  public static int equalsNonString(String s, Object o) { return s.equals(o) ? 1 : 0; }\n"
-        "  public static int hashCodeKnown(String s) { return s.hashCode(); }\n"
-        "  public static int toCharArraySum(String s) {\n"
-        "    char[] a = s.toCharArray();\n"
-        "    return a.length + a[0] + a[a.length - 1];\n"
-        "  }\n"
-        "  public static int repeatOk(String s) {\n"
-        "    return s.repeat(3).length() + \"ab\".repeat(2).length()\n"
-        "        + s.repeat(0).length() + s.repeat(1).length();\n"
-        "  }\n"
-        "  public static int repeatNeg(String s) {\n"
-        "    try { return s.repeat(-2).length(); }\n"
-        "    catch (IllegalArgumentException e) { return -7; }\n"
-        "  }\n"
-        "}\n",
-        {
-            // "hello"：'l' 命中 3、'z' 未命中 -1 → 29；'l',3=3 / 'l',0=-1 /
-            // 'l',-1=-1（负 fromIndex）/ 'l',99=3（超界 clamp）→ 4。
-            {"lastIndexOfChar", "RegCStringBatch.lastIndexOfChar(\"hello\")"},
-            {"lastIndexOfCharFrom", "RegCStringBatch.lastIndexOfCharFrom(\"hello\")"},
-            // "lo" 命中 3、`zz` 未命中 -1 → 29；"l",4=3 / "l",0=-1 / "l",-1=-1 /
-            // 空 needle "",2=2（clamp 后 fromIndex 即命中位）→ 3。
-            {"lastIndexOfStr", "RegCStringBatch.lastIndexOfStr(\"hello\")"},
-            {"lastIndexOfStrFrom", "RegCStringBatch.lastIndexOfStrFrom(\"hello\")"},
-            {"substringOk", "RegCStringBatch.substringOk(\"hello\")"},
-            {"substringEmpty", "RegCStringBatch.substringEmpty(\"hello\")"},
-            {"substringOob", "RegCStringBatch.substringOob(\"hello\")"},
-            {"substringReverse", "RegCStringBatch.substringReverse(\"hello\")"},
-            {"charAtOk", "RegCStringBatch.charAtOk(\"hello\")"},
-            {"charAtOob", "RegCStringBatch.charAtOob(\"hello\")"},
-            {"charAtNeg", "RegCStringBatch.charAtNeg(\"hello\")"},
-            {"equalsSame", "RegCStringBatch.equalsSame(\"hello\")"},
-            {"equalsDiff", "RegCStringBatch.equalsDiff(\"hello\")"},
-            {"equalsNullArg", "RegCStringBatch.equalsNullArg(\"hello\", null)"},
-            {"equalsNonString",
-             "RegCStringBatch.equalsNonString(\"hello\", new Object())"},
-            // 已知值："hello".hashCode() == 99162322。
-            {"hashCodeHello", "RegCStringBatch.hashCodeKnown(\"hello\")"},
-            {"hashCodeEmpty", "RegCStringBatch.hashCodeKnown(\"\")"},
-            {"toCharArraySum", "RegCStringBatch.toCharArraySum(\"hello\")"},
-            // 15 + 4 + 0（count==0 空串）+ 5（count==1 返回原串）。
-            {"repeatOk", "RegCStringBatch.repeatOk(\"hello\")"},
-            {"repeatNeg", "RegCStringBatch.repeatNeg(\"hello\")"},
-        });
-}
-
-/// System 时钟 / Objects.requireNonNull / StringBuilder·StringBuffer
-/// mutate-search 补充面的 exec 级验证：时钟单调性、NPE 消息面、reverse 的
-/// 代理对保序、delete/substring 越界异常面、indexOf/lastIndexOf 命中未命中。
-/// 基准 JVM 与 protected 输出必须一致。
 TEST_F(RegCBackendE2E, SysObjectsSbIntrinsicsBatchRoundTrip)
 {
     runCase(
@@ -2557,7 +2459,7 @@ TEST_F(RegCBackendE2E, SysObjectsSbIntrinsicsBatchRoundTrip)
         "    catch (NullPointerException e) { return \"boom\".equals(e.getMessage()) ? 4 : 5; }\n"
         "  }\n"
         "  public static int rnnMessageNull() {\n"
-        "    try { java.util.Objects.requireNonNull(null, null); return 0; }\n"
+        "    try { java.util.Objects.requireNonNull((Object) null, (String) null); return 0; }\n"
         "    catch (NullPointerException e) { return e.getMessage() == null ? 6 : 7; }\n"
         "  }\n"
         "  public static int sbReverse() {\n"
@@ -2941,6 +2843,7 @@ void buildProtectedDll(const Toolchain& tc, const fs::path& dir, bool safeEnv,
     compileCrt("regc/mj2x_regc_safe_env.c", "mj2x_regc_safe_env.obj");
     compileCrt("regc/mj2x_regc_string.c", "mj2x_regc_string.obj");
     compileCrt("regc/mj2x_regc_string_builder.c", "mj2x_regc_string_builder.obj");
+    compileCrt("regc/mj2x_regc_sys.c", "mj2x_regc_sys.obj");
 
     std::vector<std::string> linkArgs = {"/nologo", "/DLL", "/OUT:" + dll.string(),
                                          (objDir / "generated.obj").string()};
